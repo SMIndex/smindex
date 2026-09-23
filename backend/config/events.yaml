@@ -1,0 +1,23 @@
+# Macro economic calendar for the regime gate (doc 00 §4, doc 05 §7, prompt Part 2).
+# The owner maintains this file. Each event blocks trading from 30 min before to
+# 30 min after (doc 05) and is inside the shared gate's macro window (doc 00 §4:
+# next 2h / last 30m). Times are UTC ISO-8601; the loader converts to epoch-ms.
+#
+# HONESTY NOTE (prompt: "source each date; if unverifiable, omit it and say so"):
+# Only deterministically-derivable dates are seeded below —
+#   NFP  = first Friday of the month, 08:30 ET (12:30 UTC while US is on EDT)
+#   ISM  = first business day of the month, 10:00 ET (14:00 UTC on EDT)
+# CPI, FOMC and PCE are scheduled by their agencies and their exact 2026 dates
+# could NOT be verified from within this environment, so they are OMITTED here.
+# Owner: add them from a verified calendar (e.g. BLS/Fed/BEA release schedules).
+events:
+  - name: NFP
+    kind: jobs
+    utc: "2026-09-04T12:30:00Z"   # first Friday of Sept 2026 (verified weekday)
+  - name: ISM
+    kind: pmi
+    utc: "2026-10-01T14:00:00Z"   # first business day of Oct 2026 (verified weekday)
+  # --- OMITTED pending owner verification (do not fabricate) ---
+  # - name: CPI  { exact 2026 release date unverified }
+  # - name: FOMC { exact 2026 meeting date unverified }
+  # - name: PCE  { exact 2026 release date unverified }

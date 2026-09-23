@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BRENTOIL Short Positioning — SMINDEX</title>
+<meta name="description" content="Live view of who is short Brent crude on the venue: size, entry, open and close times, and how much of each position our fill record accounts for.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/brand/favicon-32.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#F3F5F4;--surface:#FFF;--surface-2:#E8EDEB;--line:#D1DBD7;
+  --text:#14201C;--text-2:#3F564F;--dim:#778D86;
+  --short:#B8452C;--pos:#2C6B53;--neg:#B8452C;
+  --mm:#5E7B87;--mm-soft:#E4EBEE;--taker:#A33F2E;--taker-soft:#F8E6E2;
+  --hdg:#87682E;--hdg-soft:#F2EBDA;--gap:#7A5A8C;--warn:#8A6520;--accent:#0E6B62;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0B1311;--surface:#111B18;--surface-2:#17231F;--line:#25342F;
+  --text:#E9F2EF;--text-2:#AFC5BE;--dim:#7B948C;
+  --short:#E4705A;--pos:#5CB894;--neg:#E4705A;
+  --mm:#8FA8B3;--mm-soft:#1A252A;--taker:#EE8570;--taker-soft:#331F1B;
+  --hdg:#C7A45F;--hdg-soft:#2A2317;--gap:#B79BC9;--warn:#D4A653;--accent:#3FA89C;
+}}
+:root[data-theme="dark"]{
+  --ground:#0B1311;--surface:#111B18;--surface-2:#17231F;--line:#25342F;
+  --text:#E9F2EF;--text-2:#AFC5BE;--dim:#7B948C;
+  --short:#E4705A;--pos:#5CB894;--neg:#E4705A;
+  --mm:#8FA8B3;--mm-soft:#1A252A;--taker:#EE8570;--taker-soft:#331F1B;
+  --hdg:#C7A45F;--hdg-soft:#2A2317;--gap:#B79BC9;--warn:#D4A653;--accent:#3FA89C;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--text);font-family:var(--sans);
+  font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1340px;margin:0 auto;padding:34px 24px 80px;display:flex;
+  flex-direction:column;gap:26px}
+h1,h2{text-wrap:balance;margin:0}
+h1{font-size:30px;font-weight:600;letter-spacing:-.5px}
+h2{font-size:18px;font-weight:600}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.dim{color:var(--dim)}.num{text-align:right}.strong{font-weight:600}
+.pos{color:var(--pos)}.neg{color:var(--neg)}
+a{color:var(--accent)}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.sub{color:var(--text-2);margin:10px 0 0;max-width:76ch}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px;align-items:center}
+.meta span{font-family:var(--mono);font-size:11.5px;color:var(--text-2);
+  background:var(--surface-2);border:1px solid var(--line);padding:4px 9px;border-radius:3px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--pos);
+  margin-right:6px;vertical-align:middle}
+.dot.stale{background:var(--warn)}.dot.dead{background:var(--neg)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.dot.on{animation:pulse 2s ease-in-out infinite}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(166px,1fr));gap:12px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:15px 17px}
+.stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim)}
+.stat .v{font-family:var(--mono);font-size:24px;font-weight:600;margin-top:5px;letter-spacing:-.5px}
+.stat .n{font-size:11.5px;color:var(--text-2);margin-top:3px}
+.stat.dn .v{color:var(--short)}.stat.up .v{color:var(--pos)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.panel>.ph{padding:16px 20px;border-bottom:1px solid var(--line);
+  display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.panel>.ph p{margin:0;color:var(--text-2);font-size:12.5px;flex:1 1 300px}
+.panel>.body{padding:18px 20px}
+.panel>.body p{margin:0 0 11px;color:var(--text-2);max-width:88ch}
+.panel>.body p:last-child{margin-bottom:0}
+.panel>.body strong{color:var(--text)}
+.note{border-left:4px solid var(--warn)}.note h2{color:var(--warn)}
+.gapnote{border-left:4px solid var(--gap)}.gapnote h2{color:var(--gap)}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{font-size:10.5px;text-transform:uppercase;letter-spacing:.65px;color:var(--dim);
+  font-weight:600;text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);
+  white-space:nowrap;background:var(--surface-2)}
+td{padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--surface-2)}
+.addr{font-family:var(--mono);font-size:12px;color:var(--text)}
+.lowcov{color:var(--gap);font-weight:600}
+.tag{display:inline-block;font-size:10px;font-weight:600;letter-spacing:.3px;
+  padding:2px 6px;border-radius:3px;margin-right:4px}
+.tag-mm{background:var(--mm-soft);color:var(--mm)}
+.tag-taker{background:var(--taker-soft);color:var(--taker)}
+.tag-hdg{background:var(--hdg-soft);color:var(--hdg)}
+.sub2{display:block;font-size:10px;color:var(--dim);letter-spacing:.1px}
+.when{line-height:1.3}
+.live{color:var(--accent);font-weight:600}
+.side{font-size:10px;font-weight:600;padding:2px 7px;border-radius:3px;
+  text-transform:uppercase;letter-spacing:.3px}
+.side-short{background:var(--taker-soft);color:var(--taker)}
+.side-long{background:var(--mm-soft);color:var(--mm)}
+.chartwrap{padding:16px 20px 4px}
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .ax{fill:var(--dim);font-family:var(--mono);font-size:10.5px}
+.chart .axnow{fill:var(--short);font-family:var(--mono);font-size:11px;font-weight:600}
+.chart .axhi{fill:var(--dim);font-family:var(--mono);font-size:10.5px}
+.chart .line{stroke:var(--text-2);stroke-width:1.7;stroke-linejoin:round}
+.chart .nowline{stroke:var(--short);stroke-width:1.2;stroke-dasharray:4 3}
+.chart .hiline{stroke:var(--dim);stroke-width:1;stroke-dasharray:2 4}
+.chart .g0{stop-color:var(--text-2);stop-opacity:.16}
+.chart .g1{stop-color:var(--text-2);stop-opacity:0}
+.chart .mk{stroke:var(--surface);stroke-width:1.5;cursor:help}
+.chart .mk-taker{fill:var(--taker)}.chart .mk-mm{fill:var(--mm)}.chart .mk-oth{fill:var(--accent)}
+.legend{display:flex;gap:16px;flex-wrap:wrap;padding:6px 20px 16px;font-size:11.5px;color:var(--text-2)}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+ul{margin:0 0 11px;padding-left:19px;color:var(--text-2);max-width:88ch}
+li{margin-bottom:8px}li:last-child{margin-bottom:0}li strong{color:var(--text)}
+code{font-family:var(--mono);font-size:11.8px;background:var(--surface-2);
+  padding:1px 5px;border-radius:3px;border:1px solid var(--line)}
+footer{color:var(--dim);font-size:11.5px;border-top:1px solid var(--line);padding-top:18px;
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.skel{color:var(--dim);padding:22px 20px;font-family:var(--mono);font-size:12px}
+@media (max-width:640px){.wrap{padding:24px 13px 60px}h1{font-size:23px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">SMINDEX · xyz:BRENTOIL · HIP-3 builder dex</div>
+  <h1>BRENTOIL Short Positioning</h1>
+  <p class="sub">Who is short Brent crude on the venue right now — size, entry, when each
+  position opened and closed, and how much of it our own fill record can account for.</p>
+  <div class="meta">
+    <span id="liveBadge"><i class="dot on" id="dot"></i><span id="liveTxt">connecting…</span></span>
+    <span id="mWallets">—</span><span id="mFills">—</span><span id="mCov">—</span>
+    <span>read-only</span>
+  </div>
+</header>
+
+<section class="panel note">
+  <div class="ph"><h2>How to read this</h2></div>
+  <div class="body">
+    <p>A large short is <strong>a place to look, not evidence</strong>. Brent fell, so everyone
+    short it is profitable — that is the definition of the position, not skill or foreknowledge.
+    What is worth reading is <strong>concentration</strong> (a position built in minutes rather
+    than days), <strong>pure takers</strong> who crossed the spread every time instead of quoting,
+    and entries clustered near the high. Rows flagged <span class="tag tag-mm">MM</span> are
+    market makers and are mostly noise.</p>
+    <p><strong>Size covered</strong> is the honest caveat on every row: where it reads well under
+    100%, the wallet built most of its position outside our fill record. Position history does not
+    exist for HIP-3 markets at all, so we can date a wallet's first visible opening fill but not
+    what it held before that.</p>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="stat dn"><div class="k">Brent mark</div><div class="v" id="sMark">—</div>
+    <div class="n" id="sMarkN">—</div></div>
+  <div class="stat"><div class="k">Wallets short</div><div class="v" id="sNShort">—</div>
+    <div class="n" id="sNShortN">—</div></div>
+  <div class="stat up"><div class="k">Shorts' open P&amp;L</div><div class="v" id="sUpnl">—</div>
+    <div class="n">unrealised, live</div></div>
+  <div class="stat"><div class="k">Wallets long</div><div class="v" id="sNLong">—</div>
+    <div class="n" id="sNLongN">—</div></div>
+  <div class="stat"><div class="k">Episodes</div><div class="v" id="sTrips">—</div>
+    <div class="n" id="sTripsN">—</div></div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Brent, and where each short went on</h2>
+    <p>Hourly volume-weighted price from our fill tape. Each dot is a wallet's first
+    short-opening fill at its average entry; dot size tracks position size.</p></div>
+  <div class="chartwrap" id="chart"><div class="skel">loading chart…</div></div>
+  <div class="legend">
+    <span><i style="background:var(--taker)"></i>pure taker</span>
+    <span><i style="background:var(--mm)"></i>market maker</span>
+    <span><i style="background:var(--accent)"></i>other</span>
+    <span class="dim">hover a dot for the wallet</span>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Currently short Brent</h2>
+    <p>Live venue state, sorted by notional. Every row here is open, so <strong>closed</strong>
+    shows how long it has run.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>wallet</th><th class="num">size (units)</th>
+      <th class="num">notional</th><th class="num">avg entry</th><th>opened</th><th>closed</th>
+      <th class="num">open P&amp;L</th><th class="num">lev</th><th class="num">maker</th>
+      <th class="num">size covered</th><th>flags</th></tr></thead>
+    <tbody id="shortRows"><tr><td colspan="12" class="skel">loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Currently long Brent</h2>
+    <p>The other side — the wallets the shorts are winning against.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>wallet</th><th class="num">size (units)</th>
+      <th class="num">notional</th><th class="num">avg entry</th><th>opened</th><th>closed</th>
+      <th class="num">open P&amp;L</th><th class="num">lev</th><th>flags</th></tr></thead>
+    <tbody id="longRows"><tr><td colspan="10" class="skel">loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Every position, open to close</h2>
+    <p id="tripsNote">Episodes of $25k or more rebuilt from the fill tape. An episode runs
+    flat&rarr;flat; a long-to-short flip closes one and opens the next. Realised P&amp;L is the
+    venue's own <code>closedPnl</code> summed over the closing fills.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>wallet</th><th>side</th><th class="num">size (units)</th>
+      <th class="num">notional</th><th class="num">entry</th><th class="num">exit</th>
+      <th>opened</th><th>closed</th><th class="num">held</th>
+      <th class="num">realised</th><th class="num">fills</th><th>flags</th></tr></thead>
+    <tbody id="tripRows"><tr><td colspan="13" class="skel">loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Short-opening fills of $100,000 or more</h2>
+    <p>Newest first, each tied to the position episode it belongs to.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>#</th><th>fill time</th><th>wallet</th><th>direction</th><th class="num">price</th>
+      <th class="num">size</th><th class="num">notional</th><th>position opened</th>
+      <th>position closed</th><th>flags</th></tr></thead>
+    <tbody id="fillRows"><tr><td colspan="10" class="skel">loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="ph"><h2>Brent daily</h2>
+    <p>From our own fill tape — open and close are hourly VWAPs, not venue candles. The last two
+    columns count position episodes opened and closed that day.</p></div>
+  <div class="scroll"><table>
+    <thead><tr><th>day</th><th class="num">open</th><th class="num">high</th><th class="num">low</th>
+      <th class="num">close</th><th class="num">change</th><th class="num">volume</th>
+      <th class="num">opened</th><th class="num">closed</th></tr></thead>
+    <tbody id="dayRows"><tr><td colspan="9" class="skel">loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section class="panel gapnote">
+  <div class="ph"><h2>What we still cannot see</h2>
+    <p>Entry times come from fills. Position history does not exist for this market.</p></div>
+  <div class="body">
+    <p>The position sweep calls <code>clearinghouseState</code> without a <code>dex</code>
+    parameter, so HIP-3 markets are invisible to it and <code>analytics_positions</code> holds no
+    Brent rows. We can date a wallet's first visible short-opening fill, but not what it held
+    before that, nor whether it quietly flipped from long. Fill coverage also starts at the date
+    in the header — anything built earlier is invisible, which is why several rows show a position
+    far larger than the fills backing it.</p>
+  </div>
+</section>
+
+<footer>
+  <span>SMINDEX · read-only · positions live from the venue, history from our fill tape</span>
+  <span id="fGen">—</span>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var URL_ = '/brent.json', PERIOD = 60000;
+  var lastGen = 0, failures = 0, timer = null;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setHTML(id, html) {
+    var el = $(id);
+    if (el && typeof html === 'string') el.innerHTML = html;
+  }
+
+  function render(d) {
+    var s = d.stats, h = d.html;
+    $('sMark').textContent = s.mark;
+    $('sMarkN').textContent = s.chg + '% on the day · ' + s.fromhigh + '% from the ' + s.high + ' high';
+    $('sNShort').textContent = s.nshort;
+    $('sNShortN').textContent = s.totshort.replace(/<[^>]+>/g, '') + ' notional';
+    $('sUpnl').innerHTML = s.upnl;
+    $('sNLong').textContent = s.nlong;
+    $('sNLongN').textContent = s.totlong.replace(/<[^>]+>/g, '') + ' notional';
+    $('sTrips').textContent = s.ntrips;
+    $('sTripsN').textContent = s.nclosed + ' closed · ' + s.nlive + ' still open';
+    $('mWallets').textContent = s.nwallets + ' wallets seen';
+    $('mFills').textContent = s.nfills + ' fills held';
+    $('mCov').textContent = 'coverage from ' + s.covfrom;
+    setHTML('chart', h.chart);
+    setHTML('shortRows', h.shortRows);
+    setHTML('longRows', h.longRows);
+    setHTML('tripRows', h.tripRows);
+    setHTML('fillRows', h.fillRows);
+    setHTML('dayRows', h.dayRows);
+    $('fGen').textContent = 'generated ' + d.generated.replace('T', ' ').slice(0, 19) + ' UTC';
+    lastGen = d.generated_ms || Date.now();
+  }
+
+  function tick() {
+    // age of the DATA, not of the last fetch — a stale file must look stale
+    var age = Math.round((Date.now() - lastGen) / 1000);
+    var dot = $('dot'), txt = $('liveTxt');
+    if (!lastGen) return;
+    dot.className = 'dot on' + (age > 300 ? ' dead' : age > 150 ? ' stale' : '');
+    txt.textContent = age < 90 ? 'live · updated ' + age + 's ago'
+      : age < 3600 ? 'updated ' + Math.round(age / 60) + 'm ago'
+      : 'stale · ' + Math.round(age / 3600) + 'h old';
+  }
+
+  function load() {
+    fetch(URL_ + '?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { failures = 0; render(d); tick(); })
+      .catch(function (e) {
+        failures++;
+        var dot = $('dot'), txt = $('liveTxt');
+        if (dot) dot.className = 'dot dead';
+        if (txt) txt.textContent = 'update failed (' + failures + ') — retrying';
+      });
+  }
+
+  function schedule() {
+    clearInterval(timer);
+    timer = setInterval(load, PERIOD);
+  }
+
+  // pause polling while the tab is hidden, refresh immediately on return
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { clearInterval(timer); }
+    else { load(); schedule(); }
+  });
+
+  load();
+  schedule();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>

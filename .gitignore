@@ -1,0 +1,46 @@
+
+# Backups (huge — DB dumps + source snapshots)
+# Claude (keep memory and plans, ignore rest)
+# Docker
+# Environment
+# IDE
+# Lock files
+# Logs
+# Node
+# OS
+# Python
+# Temp files
+*.egg-info/
+*.log
+*.py[cod]
+*.sql
+*.tsbuildinfo
+.claude/settings*
+.claude/statsig*
+.claude/todos*
+.DS_Store
+.env
+.env.local
+.env.production
+.idea/
+.venv/
+.vscode/
+__pycache__/
+backend/account_data.json
+backend/app - Copy/
+backend/tmp_*.js
+backend/tmp_*.json
+backup*/
+dist/
+docker-compose.override.yml
+env/
+frontend/dist/
+frontend/src - Copy/
+node_modules/
+package-lock.json
+perpl_restore_*.sql
+scripts/2/
+scripts/scripts.zip
+Thumbs.db
+venv/
+backups/

@@ -1,0 +1,19 @@
+[Unit]
+Description=Perpl on-chain event indexer (Envio HyperSync -> MySQL, Wallet Explorer Part 4)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/terminal
+EnvironmentFile=/var/www/terminal/backend/.env
+ExecStart=/var/www/terminal/backend/venv/bin/python /var/www/terminal/indexer/perpl_indexer.py
+Restart=always
+RestartSec=15
+# modest footprint: the worker is a single-threaded fetch+decode+insert loop
+MemoryMax=512M
+StandardOutput=append:/var/log/perpl-indexer.log
+StandardError=append:/var/log/perpl-indexer.log
+
+[Install]
+WantedBy=multi-user.target

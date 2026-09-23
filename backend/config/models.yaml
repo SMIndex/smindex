@@ -1,0 +1,20 @@
+# Models M1–M6 (docs 10–16). Common block per doc 10 §7 — verbatim values.
+# Paper only. No live mode exists for models (no venue adapter).
+common:
+  assets: [BTC, ETH]
+  mode: paper
+  conviction_skip_below: 0.55
+  conviction_full_from: 0.70
+  exit_threshold: 2
+  dead_trade_hold_multiple: 1.5
+  partial_at_t1_pct: 40
+  learning_enabled: false
+  learning_start_after_days: 60
+
+models:
+  M1: {mode: paper, enabled: true, strategy_id: m1_sweep_reclaim}
+  M2: {mode: paper, enabled: true, strategy_id: m2_bos_order_block}
+  M3: {mode: paper, enabled: true, strategy_id: m3_failed_auction}
+  M4: {mode: paper, enabled: true, strategy_id: m4_htf_choch}
+  M5: {mode: paper, enabled: true, strategy_id: m5_session_liquidity_run}
+  M6: {mode: paper, enabled: true, strategy_id: m6_weekly_open_reclaim}

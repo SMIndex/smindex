@@ -1,0 +1,29 @@
+# Perpl Strategy Worker — SECOND systemd unit, separate from perpl-terminal (the
+# API). Shares the MySQL DB, imports app.db WITHOUT the FastAPI app. Phase 1:
+# data layer + feature engine only; nothing trades.
+#
+# Install (Part 7): align ExecStart's interpreter + EnvironmentFile with the
+# EXISTING perpl-terminal.service (same venv, same .env), then:
+#   cp backend/deploy/perpl-strategy-worker.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now perpl-strategy-worker
+# Hard stop (kill switch): systemctl stop perpl-strategy-worker
+[Unit]
+Description=Perpl Strategy Worker (strategy_engine data layer + features, Phase 1)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/terminal/backend
+EnvironmentFile=/var/www/terminal/backend/.env
+# NOTE: replace the interpreter path with the exact one perpl-terminal.service
+# uses (its venv python) during Part 7 install.
+ExecStart=/var/www/terminal/backend/venv/bin/python -m app.strategy_engine.worker
+Restart=on-failure
+RestartSec=5
+# Never let a worker crash restart-storm; systemd backs off.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
