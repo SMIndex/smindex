@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perpl Terminal, Strategies (mockup)</title>
+<style>
+:root{
+  --bg:#ffffff;--side:#f7f8fa;--surface:#ffffff;--surface2:#f7f8fa;--border:#e6e8ee;--text:#111827;--muted:#6b7280;--faint:#9ca3af;
+  --accent:#3b5bfd;--accent-soft:#e9edff;--green:#16a34a;--green-soft:#e6f6ec;--red:#dc2626;--red-soft:#fdeaea;--amber:#d97706;--amber-soft:#fdf3e2;
+  --radius:10px;--font:Inter,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+[data-theme=dark]{
+  --bg:#0f1117;--side:#12151c;--surface:#151922;--surface2:#1a1f2a;--border:#262b37;--text:#e5e7eb;--muted:#9aa3b2;--faint:#6b7280;
+  --accent:#5b78ff;--accent-soft:#1e2748;--green:#34d399;--green-soft:#0f2a22;--red:#f87171;--red-soft:#33181a;--amber:#fbbf24;--amber-soft:#332a12;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.45}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+.side{background:var(--side);border-right:1px solid var(--border);padding:22px 18px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:17px;margin-bottom:34px}
+.brand i{width:26px;height:26px;border-radius:7px;background:var(--accent);display:inline-block}
+.nav h6{margin:14px 0 6px;font-size:12px;font-weight:600;color:var(--muted)}
+.nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;font-size:14px;color:var(--text)}
+.nav a.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav a svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+.side .foot{margin-top:auto;font-size:13px;color:var(--muted)}
+.main{padding:28px 40px 60px;max-width:1500px}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:20px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:14px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--border);background:var(--surface2)}
+.pill.live{color:var(--green);background:var(--green-soft);border-color:transparent}
+.pill.paper{color:var(--amber);background:var(--amber-soft);border-color:transparent}
+.pill.off{color:var(--muted)}
+.pill.long{color:var(--green);background:var(--green-soft);border-color:transparent}
+.pill.short{color:var(--red);background:var(--red-soft);border-color:transparent}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block}
+.seg{display:inline-flex;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:3px}
+.seg button{padding:6px 12px;border-radius:6px;font-weight:600;font-size:13px;color:var(--muted)}
+.seg button.on{background:var(--accent);color:#fff}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);font-weight:600;font-size:13px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.strip{display:grid;grid-template-columns:repeat(6,1fr);gap:0;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);margin-bottom:22px;overflow:hidden}
+.strip>div{padding:14px 18px;border-right:1px solid var(--border)}
+.strip>div:last-child{border-right:0}
+.strip .k{color:var(--muted);font-size:12px;margin-bottom:4px}
+.strip .v{font-size:18px;font-weight:700;letter-spacing:-.01em}
+.strip .v small{font-size:12px;font-weight:500;color:var(--muted);margin-left:6px}
+.bar{height:5px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.bar.warn i{background:var(--amber)}
+table{width:100%;border-collapse:collapse;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+thead th{font-weight:600;color:var(--muted);text-align:left;padding:12px 14px;font-size:12.5px;border-bottom:1px solid var(--border);background:var(--surface)}
+tbody td{padding:13px 14px;border-bottom:1px solid var(--border);font-size:13.5px;vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--surface2)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.name{font-weight:700}
+.name small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.pos{color:var(--green);font-weight:600}.neg{color:var(--red);font-weight:600}
+.toggle{width:34px;height:20px;border-radius:12px;background:var(--border);position:relative;display:inline-block}
+.toggle.on{background:var(--accent)}
+.toggle:after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:.15s}
+.toggle.on:after{left:17px}
+.mini{width:110px;height:5px;background:var(--border);border-radius:3px;display:inline-block;vertical-align:middle;margin-left:10px}
+.mini i{display:block;height:100%;background:var(--accent);border-radius:3px}
+h2{font-size:15px;margin:26px 0 10px;font-weight:700}
+h2 span{color:var(--muted);font-weight:500;margin-left:8px;font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 360px;gap:18px;align-items:start}
+.card{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.card .hd{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-weight:700}
+.card .hd small{font-weight:500;color:var(--muted)}
+.card .bd{padding:14px 16px}
+.chart{height:340px;position:relative;background:
+  linear-gradient(var(--border) 1px,transparent 1px) 0 0/100% 56px,
+  linear-gradient(90deg,var(--border) 1px,transparent 1px) 0 0/80px 100%;
+  border-radius:0 0 var(--radius) var(--radius);overflow:hidden}
+.chart svg{position:absolute;inset:0;width:100%;height:100%}
+.legend{display:flex;gap:14px;padding:10px 16px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;flex-wrap:wrap}
+.legend b{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.state{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)}
+.state .s{font-size:12px;color:var(--muted)}
+.state .v{font-weight:700;font-size:15px}
+.cond{list-style:none;margin:0;padding:6px 0}
+.cond li{display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border)}
+.cond li:last-child{border-bottom:0}
+.cond .ic{width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff}
+.ok .ic{background:var(--green)}.no .ic{background:var(--red)}.wait .ic{background:var(--faint)}
+.cond .t{font-size:13px}.cond .t small{display:block;color:var(--muted);font-size:11.5px}
+.cond .r{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;white-space:nowrap}
+.score{padding:12px 16px;border-top:1px solid var(--border)}
+.score .row{display:grid;grid-template-columns:110px 1fr 40px;gap:10px;align-items:center;padding:4px 0;font-size:12.5px;color:var(--muted)}
+.score .row b{color:var(--text);font-weight:600;text-align:right}
+.score .total{display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:10px;border-top:1px dashed var(--border);font-weight:700}
+.score .total small{color:var(--muted);font-weight:500}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;padding:12px 16px;font-size:12.5px}
+.kv div{color:var(--muted)}.kv div b{display:block;color:var(--text);font-weight:600;font-size:13.5px}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin:24px 0 0}
+.tabs button{padding:10px 14px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button.on{color:var(--text);border-color:var(--accent)}
+.reason{color:var(--muted);font-size:12.5px}
+.view{display:none}.view.on{display:block}
+.crumb{color:var(--muted);font-size:13px;margin-bottom:8px}
+.crumb b{color:var(--text);font-weight:500}
+.hint{display:inline-block;background:var(--surface2);border:1px solid var(--border);padding:2px 8px;border-radius:6px;font-size:11.5px;color:var(--muted);margin-left:8px}
+.themebar{position:fixed;right:18px;bottom:18px;display:flex;gap:8px;z-index:9}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}.strip{grid-template-columns:repeat(3,1fr)}.app{grid-template-columns:1fr}.side{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><i></i>Perpl Terminal</div>
+    <nav class="nav">
+      <h6>Trading</h6>
+      <a href="#"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="12" height="12" rx="2"/><rect x="8" y="8" width="12" height="12" rx="2"/></svg>Copy trade</a>
+      <a href="#"><svg viewBox="0 0 24 24"><path d="M4 18V6M10 18v-8M16 18V9M22 18V4"/></svg>Terminal</a>
+      <a href="#" class="on" onclick="show('overview');return false"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>Strategies</a>
+      <h6>Markets</h6>
+      <a href="#"><svg viewBox="0 0 24 24"><path d="M4 18h16M6 14v-4M10 14V6M14 14v-3M18 14V9"/></svg>Analytics</a>
+      <h6>User</h6>
+      <a href="#"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/></svg>Portfolio</a>
+      <a href="#"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>Settings</a>
+    </nav>
+    <div class="foot"><span class="dot" style="color:var(--green)"></span>&nbsp; 0xF9b8...e2D2</div>
+  </aside>
+
+  <main class="main">
+
+  <!-- ================= OVERVIEW ================= -->
+  <section id="overview" class="view on">
+    <div class="top">
+      <div>
+        <h1>Strategies</h1>
+        <div class="sub">Six strategies share one risk engine. Each one shows what it is waiting for right now and what it has earned.</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span class="seg"><button class="on">Paper</button><button>Live</button></span>
+        <span class="sub">Hyperliquid · 2 min ago</span>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div><div class="k">Equity</div><div class="v">$1,042.60<small>+4.3% this month</small></div></div>
+      <div><div class="k">Today's P/L against 4% daily cap</div><div class="v neg">-$11.20<small>28% of cap used</small></div><div class="bar warn"><i style="width:28%"></i></div></div>
+      <div><div class="k">Open positions</div><div class="v">1 <small>of 2</small></div></div>
+      <div><div class="k">Risk per trade</div><div class="v">1.5%<small>$15.60 · max 3x</small></div></div>
+      <div><div class="k">Consecutive losses</div><div class="v">1 <small>pause at 2</small></div></div>
+      <div><div class="k">Fees this month</div><div class="v">$31.40<small>6.1% of gross</small></div></div>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th>#</th><th>Strategy</th><th>Status</th><th>Waiting for</th><th class="num">Setups today</th><th class="num">Trades 30d</th><th class="num">Win rate</th><th class="num">Profit factor</th><th class="num">Net P/L 30d</th><th></th>
+      </tr></thead>
+      <tbody>
+        <tr onclick="show('detail')" style="cursor:pointer">
+          <td>05</td><td class="name">Session open momentum<small>EU · US · Monday Asia</small></td><td><span class="pill live"><span class="dot"></span>Live</span></td>
+          <td class="reason">US open in 42 min, vol-day yes (82nd pct)</td><td class="num">1</td><td class="num">27</td><td class="num">55.6%</td><td class="num">1.62<span class="mini"><i style="width:62%"></i></span></td><td class="num pos">+$48.10</td><td><span class="toggle on"></span></td>
+        </tr>
+        <tr>
+          <td>01</td><td class="name">Liquidation sweep reversal<small>BTC · ETH</small></td><td><span class="pill live"><span class="dot"></span>Live</span></td>
+          <td class="reason">Cascade &ge; $3M in 5 min, none yet</td><td class="num">0</td><td class="num">31</td><td class="num">58.1%</td><td class="num">1.48<span class="mini"><i style="width:55%"></i></span></td><td class="num pos">+$36.90</td><td><span class="toggle on"></span></td>
+        </tr>
+        <tr>
+          <td>04</td><td class="name">Volatility compression breakout<small>BTC · ETH</small></td><td><span class="pill paper"><span class="dot"></span>Paper</span></td>
+          <td class="reason">ETH compressing 9 candles, box 2,214 to 2,231</td><td class="num">1</td><td class="num">14</td><td class="num">42.9%</td><td class="num">1.31<span class="mini"><i style="width:44%"></i></span></td><td class="num pos">+$9.30</td><td><span class="toggle on"></span></td>
+        </tr>
+        <tr>
+          <td>03</td><td class="name">Whale following<small>Cohort of 30 wallets</small></td><td><span class="pill paper"><span class="dot"></span>Paper</span></td>
+          <td class="reason">Needs 3 cohort wallets same direction, 1 so far (ETH long)</td><td class="num">0</td><td class="num">9</td><td class="num">44.4%</td><td class="num">1.12<span class="mini"><i style="width:30%"></i></span></td><td class="num neg">-$2.40</td><td><span class="toggle on"></span></td>
+        </tr>
+        <tr>
+          <td>02</td><td class="name">Funding settlement flow<small>CEX 8h clock, HL execution</small></td><td><span class="pill paper"><span class="dot"></span>Paper</span></td>
+          <td class="reason">Next window 16:00 UTC, funding normal (z 0.6)</td><td class="num">0</td><td class="num">6</td><td class="num">50.0%</td><td class="num">1.05<span class="mini"><i style="width:26%"></i></span></td><td class="num pos">+$0.80</td><td><span class="toggle on"></span></td>
+        </tr>
+        <tr>
+          <td>06</td><td class="name">Hull + Fisher + EMA pullback<small>Gated · also timing layer for all</small></td><td><span class="pill off"><span class="dot"></span>Timing only</span></td>
+          <td class="reason">Gate closed: BTC OI falling while price rising</td><td class="num">0</td><td class="num">18 <span class="hint">paper</span></td><td class="num">50.0%</td><td class="num">1.21<span class="mini"><i style="width:36%"></i></span></td><td class="num pos">+$4.10 <span class="hint">paper</span></td><td><span class="toggle"></span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Open positions<span>1</span></h2>
+    <table>
+      <thead><tr><th>Strategy</th><th>Asset</th><th>Side</th><th class="num">Size</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Unrealised</th><th>Exit at</th></tr></thead>
+      <tbody><tr><td>05 Session open</td><td class="name">BTC</td><td><span class="pill long">Long</span></td><td class="num">0.048 · 2.8x</td><td class="num">61,450</td><td class="num">61,215</td><td class="num">61,800 / 62,190</td><td class="num pos">+$6.72</td><td class="reason">Target, stop, or 16:31 (time stop)</td></tr></tbody>
+    </table>
+
+    <h2>Recent signals<span>fired and skipped, last 24h</span></h2>
+    <table>
+      <thead><tr><th>Time</th><th>Strategy</th><th>Asset</th><th>Result</th><th>Reason</th><th class="num">Score</th></tr></thead>
+      <tbody>
+        <tr><td>13:31</td><td>05 Session open</td><td class="name">BTC</td><td><span class="pill long">Fired long</span></td><td class="reason">OR break +0.14 ATR, volume 1.6x, Hull 1h up, bias +0.31</td><td class="num">0.72</td></tr>
+        <tr><td>11:05</td><td>01 Liq sweep</td><td class="name">ETH</td><td><span class="pill off">Skipped</span></td><td class="reason">Cascade $2.1M but only 18 wallets, below the 25 wallet minimum</td><td class="num">0.41</td></tr>
+        <tr><td>07:32</td><td>05 Session open</td><td class="name">ETH</td><td><span class="pill off">Skipped</span></td><td class="reason">Low-vol day, 24h realised vol 34th percentile</td><td class="num">&mdash;</td></tr>
+        <tr><td>02:14</td><td>04 Compression</td><td class="name">BTC</td><td><span class="pill off">Not confirmed</span></td><td class="reason">Break candle closed, OI fell 0.8% during break (collapse, not rotation)</td><td class="num">0.52</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= DETAIL ================= -->
+  <section id="detail" class="view">
+    <div class="crumb"><a href="#" onclick="show('overview');return false">Strategies</a> &nbsp;/&nbsp; <b>05 Session open momentum</b></div>
+    <div class="top">
+      <div>
+        <h1>Session open momentum <span class="pill live" style="vertical-align:middle;margin-left:8px"><span class="dot"></span>Live</span></h1>
+        <div class="sub">First directional push after the EU, US and Monday Asia opens, on high-volatility days only. Hyperliquid · BTC, ETH · 1.5% risk · max 3x.</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <span class="seg"><button>Off</button><button>Paper</button><button class="on">Live</button></span>
+        <button class="btn">Parameters</button>
+        <button class="btn">Backtest</button>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div><div class="k">Trades 30d</div><div class="v">27</div></div>
+      <div><div class="k">Win rate</div><div class="v">55.6%<small>target 50 to 56</small></div></div>
+      <div><div class="k">Profit factor</div><div class="v">1.62<small>kill below 0.9</small></div><div class="bar"><i style="width:62%"></i></div></div>
+      <div><div class="k">Expectancy per trade</div><div class="v pos">+$1.78</div></div>
+      <div><div class="k">Max drawdown</div><div class="v">-$38.40<small>3.7%</small></div></div>
+      <div><div class="k">Fee drag</div><div class="v">7.8%<small>of gross</small></div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="hd">BTC · 15m <small>Opening range, entries and exits drawn on the chart</small>
+          <span class="seg" style="padding:2px"><button class="on" style="padding:4px 9px">BTC</button><button style="padding:4px 9px">ETH</button></span>
+        </div>
+        <div class="chart">
+          <svg viewBox="0 0 900 340" preserveAspectRatio="none">
+            <rect x="330" y="150" width="120" height="70" fill="var(--accent)" opacity=".10"/>
+            <line x1="330" y1="150" x2="900" y2="150" stroke="var(--accent)" stroke-width="1" stroke-dasharray="4 4"/>
+            <line x1="330" y1="220" x2="900" y2="220" stroke="var(--accent)" stroke-width="1" stroke-dasharray="4 4"/>
+            <text x="336" y="234" font-size="10" fill="var(--accent)">Opening range 61,020 to 61,410</text>
+            <polyline fill="none" stroke="var(--muted)" stroke-width="1.6" points="0,230 60,225 120,238 180,232 240,240 300,228 330,200 360,175 390,190 420,168 450,160 480,142 510,135 540,148 570,128 600,120 630,132 660,110 700,118 740,98 780,105 820,88 860,96 900,84"/>
+            <line x1="0" y1="185" x2="900" y2="185" stroke="var(--red)" stroke-width="1" stroke-dasharray="2 4"/><text x="8" y="181" font-size="10" fill="var(--red)">Stop 61,215</text>
+            <line x1="0" y1="112" x2="900" y2="112" stroke="var(--green)" stroke-width="1" stroke-dasharray="2 4"/><text x="8" y="108" font-size="10" fill="var(--green)">Target 1 61,800</text>
+            <circle cx="480" cy="142" r="6" fill="var(--green)"/><text x="490" y="166" font-size="10" fill="var(--green)">Entry 61,450 (post-only filled)</text>
+            <rect x="0" y="0" width="330" height="340" fill="var(--faint)" opacity=".07"/>
+            <text x="8" y="16" font-size="10" fill="var(--muted)">Before US open</text>
+          </svg>
+        </div>
+        <div class="legend"><span><b style="background:var(--accent);opacity:.4"></b>Opening range</span><span><b style="background:var(--green)"></b>Entry / target</span><span><b style="background:var(--red)"></b>Stop</span><span><b style="background:var(--faint)"></b>Outside trade window</span></div>
+      </div>
+
+      <div class="card">
+        <div class="state"><div><div class="s">Current state</div><div class="v">In position · BTC long</div></div><div class="pill long"><span class="dot"></span>Filled 13:33</div></div>
+        <ul class="cond">
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">High-volatility day<small>24h realised vol vs 30d</small></span><span class="r">82nd pct (need 60)</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">Opening-range break<small>15m close beyond range</small></span><span class="r">+0.14 ATR (need 0.10)</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">Break-candle volume<small>vs 20-candle average</small></span><span class="r">1.6x (need 1.3x)</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">Bias not against<small>whales, funding, basis, crowd</small></span><span class="r">+0.31</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">Timing<small>1h Hull slope, 15m Fisher turn</small></span><span class="r">Hull up · Fisher +</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">Funding not extreme on trade side</span><span class="r">z 0.6</span></li>
+          <li class="ok"><span class="ic">&#10003;</span><span class="t">No macro event in window</span><span class="r">Next: PCE, tomorrow</span></li>
+          <li class="wait"><span class="ic">&middot;</span><span class="t">Exit<small>target, stop, or time stop</small></span><span class="r">Time stop 16:31</span></li>
+        </ul>
+        <div class="score">
+          <div class="row"><span>Vol-day quality</span><div class="bar" style="margin:0"><i style="width:82%"></i></div><b>0.21</b></div>
+          <div class="row"><span>Break quality</span><div class="bar" style="margin:0"><i style="width:60%"></i></div><b>0.12</b></div>
+          <div class="row"><span>Bias alignment</span><div class="bar" style="margin:0"><i style="width:65%"></i></div><b>0.13</b></div>
+          <div class="row"><span>Timing</span><div class="bar" style="margin:0"><i style="width:100%"></i></div><b>0.20</b></div>
+          <div class="row"><span>Volume</span><div class="bar" style="margin:0"><i style="width:40%"></i></div><b>0.06</b></div>
+          <div class="total"><span>Score 0.72 <small>fires at 0.65</small></span><span class="pill long">Fired</span></div>
+        </div>
+        <div class="kv">
+          <div>Entry<b>61,450 post-only</b></div><div>Size<b>0.048 BTC · 2.8x</b></div>
+          <div>Stop<b>61,215 (-$11.30)</b></div><div>Targets<b>61,800 · 62,190</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabs"><button class="on">Signals</button><button>Trades</button><button>By session</button><button>Parameters</button><button>Changelog</button></div>
+    <table style="border-top:0;border-radius:0 0 var(--radius) var(--radius)">
+      <thead><tr><th>Time</th><th>Session</th><th>Asset</th><th>Result</th><th>Reason</th><th class="num">Score</th><th class="num">Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>Today 13:31</td><td>US</td><td class="name">BTC</td><td><span class="pill long">Fired long</span></td><td class="reason">All conditions met, see panel</td><td class="num">0.72</td><td class="num pos">open +$6.72</td></tr>
+        <tr><td>Today 07:32</td><td>EU</td><td class="name">ETH</td><td><span class="pill off">Skipped</span></td><td class="reason">Low-vol day, 34th percentile</td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
+        <tr><td>Today 07:31</td><td>EU</td><td class="name">BTC</td><td><span class="pill off">Skipped</span></td><td class="reason">Low-vol day, 41st percentile</td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
+        <tr><td>Yesterday 14:02</td><td>US</td><td class="name">ETH</td><td><span class="pill short">Fired short</span></td><td class="reason">OR break -0.18 ATR, volume 2.1x, bias -0.22</td><td class="num">0.69</td><td class="num pos">+$14.10 target 1</td></tr>
+        <tr><td>Yesterday 13:46</td><td>US</td><td class="name">BTC</td><td><span class="pill off">Not filled</span></td><td class="reason">Post-only at 60,880 never traded through in 2 candles</td><td class="num">0.67</td><td class="num">&mdash;</td></tr>
+        <tr><td>Mon 00:34</td><td>Mon Asia</td><td class="name">BTC</td><td><span class="pill long">Fired long</span></td><td class="reason">OR break, Hull up, bias +0.44</td><td class="num">0.74</td><td class="num neg">-$15.20 stop</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  </main>
+</div>
+<div class="themebar">
+  <button class="btn" onclick="show('overview')">Overview</button>
+  <button class="btn" onclick="show('detail')">Strategy detail</button>
+  <button class="btn" onclick="toggleTheme()">Light / dark</button>
+</div>
+<script>
+function show(id){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('on',v.id===id));window.scrollTo(0,0)}
+function toggleTheme(){const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'}
+</script>
+</body>
+</html>

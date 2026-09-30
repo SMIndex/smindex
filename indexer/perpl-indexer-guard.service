@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop the Perpl indexer if API p95 goes over 1.5 s
+
+[Service]
+Type=oneshot
+ExecStart=/var/www/terminal/indexer/indexer_guard.sh

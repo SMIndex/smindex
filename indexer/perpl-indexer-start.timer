@@ -1,0 +1,9 @@
+[Unit]
+Description=Perpl indexer off-peak window: start 01:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 01:00:00 UTC
+Persistent=false
+
+[Install]
+WantedBy=timers.target

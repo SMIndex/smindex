@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the BRENTOIL page data every 5 minutes
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=300
+AccuracySec=5s
+Unit=smindex-brent.service
+
+[Install]
+WantedBy=timers.target

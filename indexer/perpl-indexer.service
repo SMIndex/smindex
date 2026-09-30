@@ -1,0 +1,30 @@
+[Unit]
+Description=Perpl on-chain event indexer (Envio HyperSync -> MySQL, Wallet Explorer Part 4)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/terminal
+EnvironmentFile=/var/www/terminal/backend/.env
+ExecStart=/var/www/terminal/backend/venv/bin/python /var/www/terminal/indexer/perpl_indexer.py
+Restart=always
+RestartSec=15
+# modest footprint: the worker is a single-threaded fetch+decode+insert loop
+MemoryMax=512M
+# Low priority so the API stays fast during the backfill (pending item 5).
+# INDEXER_BACKFILL_SLEEP lives HERE, never in backend/.env: the API's pydantic
+# Settings reads that file and crash-loops on unknown keys.
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=20
+Environment=INDEXER_BACKFILL_SLEEP=3
+# Since 2026-09-30 this unit stays DISABLED and runs only in the off-peak
+# window: perpl-indexer-start.timer (01:00 UTC) / perpl-indexer-stop.timer
+# (06:00 UTC); perpl-indexer-guard.timer stops it early if API p95 > 1.5 s.
+# To pause the window: systemctl disable --now perpl-indexer-start.timer
+StandardOutput=append:/var/log/perpl-indexer.log
+StandardError=append:/var/log/perpl-indexer.log
+
+[Install]
+WantedBy=multi-user.target
