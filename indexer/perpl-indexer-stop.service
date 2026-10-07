@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop the Perpl indexer at the end of the off-peak window
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop perpl-indexer.service

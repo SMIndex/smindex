@@ -1,0 +1,1 @@
+import{aJ as e,Q as p}from"./index-CFgtpbVN.js";import{s as r}from"./signTypedData-fdzOlAP6.js";function c(t){return{mutationFn(n){return r(t,n)},mutationKey:["signTypedData"]}}function g(t={}){const{mutation:n}=t,a=e(t),o=c(a),{mutate:s,mutateAsync:i,...u}=p({...n,...o});return{...u,signTypedData:s,signTypedDataAsync:i}}export{g as u};

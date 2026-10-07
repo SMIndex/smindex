@@ -1,0 +1,6 @@
+[Unit]
+Description=Start the Perpl indexer for the off-peak window (01:00-06:00 UTC)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl start perpl-indexer.service

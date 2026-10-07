@@ -1,0 +1,13 @@
+[Unit]
+Description=Regenerate the SMINDEX BRENTOIL positioning payload
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/var/www/terminal/backend
+ExecStart=/var/www/terminal/backend/venv/bin/python scripts/brent_page.py --out /var/www/terminal/frontend/dist
+# a slow venue response must not let two runs overlap (240 s < the 300 s cadence)
+TimeoutStartSec=240
+Nice=10
+IOSchedulingClass=idle

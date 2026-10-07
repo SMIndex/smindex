@@ -1,0 +1,8 @@
+[Unit]
+Description=SMINDEX beta monitor (uptime, restarts, OOM, sweep, disk/swap, copy failures; daily summary)
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=55
+ExecStart=/var/www/terminal/backend/venv/bin/python /var/www/terminal/backend/scripts/smindex_monitor.py

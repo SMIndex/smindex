@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet Explorer — Design B layout reference (Coinglass density)</title>
+<style>
+  /* Design B tokens (light default / dark via [data-theme=dark]) */
+  :root{
+    --bg:#F4F5F7; --s1:#FFFFFF; --s2:#EDEFF3; --s3:#E2E5EB; --line:#D8DCE4;
+    --text:#121722; --muted:#5B6473; --dim:#8A93A3;
+    --accent:#2447E6; --accent-soft:#E4E9FC; --accent-text:#1B38C4;
+    --long:#0B8F5F; --long-soft:#DDF3E9; --short:#CF3548; --short-soft:#FBE3E6;
+    --amber:#B7791F; --amber-soft:#FBEFD7;
+  }
+  [data-theme=dark]{
+    --bg:#0C1418; --s1:#12202A; --s2:#182A35; --s3:#1F3641; --line:#274552;
+    --text:#EAF2F5; --muted:#9DB4BF; --dim:#6E8791;
+    --accent:#4F8CFF; --accent-soft:#16304A; --accent-text:#7FB0FF;
+    --long:#2DD4A0; --long-soft:#123D34; --short:#FF6B7A; --short-soft:#47202A;
+    --amber:#F2B84B; --amber-soft:#3C2E14;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{background:var(--bg); color:var(--text); font:14px/1.45 "IBM Plex Sans",system-ui,sans-serif; padding:28px 36px}
+  .mono{font-family:"IBM Plex Mono",monospace}
+  .num{font-feature-settings:"tnum"}
+  .card{background:var(--s1); border:1px solid var(--line); border-radius:12px}
+  .tag{font-size:11.5px; padding:3px 9px; border-radius:6px; font-weight:600}
+  .dim{color:var(--dim)} .muted{color:var(--muted)}
+  .pos{color:var(--long)} .neg{color:var(--short)}
+  .row{display:flex; align-items:center; gap:8px}
+  button{font:inherit; border:1px solid var(--line); background:var(--s1); color:var(--text); border-radius:8px; padding:6px 12px; cursor:pointer}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  /* 1. header */
+  .hdr{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px}
+  .hdr .addr{font-size:17px; font-weight:600}
+
+  /* 2. stat cards */
+  .stats{display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:14px}
+  .stat{padding:12px 14px}
+  .stat .lbl{font-size:11.5px; color:var(--dim); margin-bottom:2px}
+  .stat .val{font-size:18px; font-weight:600}
+
+  /* 3. equity */
+  .equity{padding:14px 16px; margin-bottom:14px}
+  .equity .top{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px}
+  .pill{font-size:11.5px; padding:3px 10px; border-radius:6px; color:var(--muted); cursor:pointer}
+  .pill.on{background:var(--accent-soft); color:var(--accent-text); font-weight:600}
+  .equity svg{width:100%; height:160px; display:block}
+
+  /* 4. donuts */
+  .donuts{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:14px}
+  .donut{padding:14px; display:flex; gap:14px; align-items:center}
+  .donut svg{width:64px; height:64px; flex-shrink:0}
+  .donut .big{font-size:17px; font-weight:600}
+
+  /* 5. tabs + table */
+  .panel{padding:14px 16px}
+  .tabs{display:flex; gap:16px; border-bottom:1px solid var(--line); margin-bottom:10px; overflow-x:auto}
+  .tab{font-size:13px; color:var(--muted); padding:0 0 9px; white-space:nowrap; cursor:pointer}
+  .tab.on{color:var(--accent-text); font-weight:600; border-bottom:2px solid var(--accent)}
+  table{width:100%; border-collapse:collapse; font-size:12.5px}
+  th{font-size:11px; color:var(--dim); font-weight:500; text-align:left; padding:6px 8px}
+  td{padding:8px; border-top:1px solid var(--s2); vertical-align:top}
+  th.r,td.r{text-align:right}
+  .side{font-weight:600}
+  .ctx{font-size:11.5px; color:var(--muted); padding:0 8px 8px 8px}
+  .foot{display:flex; justify-content:space-between; font-size:11.5px; color:var(--dim); margin-top:10px; flex-wrap:wrap; gap:6px}
+
+  /* venue section header */
+  .venue-h{display:flex; align-items:center; gap:10px; margin:22px 0 12px}
+  .venue-h h2{font-size:15px; font-weight:600}
+
+  @media (max-width:1100px){ .stats{grid-template-columns:repeat(2,1fr)} .donuts{grid-template-columns:1fr} }
+  @media (max-width:800px){ body{padding:14px} .stats{grid-template-columns:repeat(2,1fr)} table{font-size:11.5px} }
+</style>
+</head>
+<body>
+  <!-- theme toggle for review only -->
+  <button style="position:fixed; right:16px; bottom:16px; z-index:9" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'':'dark'">Toggle theme</button>
+
+  <!-- 1. ADDRESS HEADER -->
+  <div class="hdr">
+    <span class="addr mono">0xc3ed…00dd</span>
+    <span class="tag" style="background:var(--accent-soft); color:var(--accent-text)">HL rank #12</span>
+    <span class="tag" style="background:var(--s2); color:var(--muted)">PF 1.6 · win 52% (1,204) · maxDD 8%</span>
+    <span class="tag" style="border:1px solid var(--line); color:var(--muted)">Perpl acct #2118</span>
+    <span class="tag" style="background:var(--amber-soft); color:var(--amber)">hedger</span>
+    <span style="margin-left:auto" class="row">
+      <button>Watch</button><button>Alerts</button><button class="primary">Copy</button>
+    </span>
+  </div>
+
+  <!-- 2. PNL STAT CARDS (portfolio windows; 48h computed from week.pnlHistory; 30d card carries net-deposits caption) -->
+  <div class="stats num">
+    <div class="card stat"><div class="lbl">Total PnL</div><div class="val neg">−$1.25M</div></div>
+    <div class="card stat"><div class="lbl">24h PnL</div><div class="val neg">−$126.4K</div></div>
+    <div class="card stat"><div class="lbl">48h PnL</div><div class="val neg">−$126.4K</div></div>
+    <div class="card stat"><div class="lbl">7d PnL</div><div class="val neg">−$1.40M</div></div>
+    <div class="card stat"><div class="lbl">30d PnL · net deposits $2.1M</div><div class="val neg">−$1.25M</div></div>
+  </div>
+
+  <!-- 3. EQUITY CHART (windows + perp-only toggle; venue-computed, labelled) -->
+  <div class="card equity">
+    <div class="top">
+      <span style="font-size:13px; font-weight:600">Equity <span class="dim" style="font-weight:400">· venue PnL, includes unrealized</span></span>
+      <span class="row num">
+        <span class="pill">24h</span><span class="pill">7d</span><span class="pill on">30d</span><span class="pill">All</span>
+        <span class="pill" style="border:1px solid var(--line)">Perp only</span>
+      </span>
+    </div>
+    <svg viewBox="0 0 900 160" preserveAspectRatio="none" aria-label="equity curve">
+      <line x1="0" y1="64" x2="900" y2="64" stroke="var(--line)" stroke-dasharray="4 4" stroke-width="1"/>
+      <path d="M0,52 L80,50 L160,60 L240,58 L330,34 L380,80 L420,46 L470,66 L510,62 L525,138 L590,142 L660,140 L740,144 L820,138 L900,148"
+            fill="none" stroke="var(--short)" stroke-width="2"/>
+      <path d="M0,52 L80,50 L160,60 L240,58 L330,34 L380,80 L420,46 L470,66 L510,62 L525,138 L590,142 L660,140 L740,144 L820,138 L900,148 L900,160 L0,160 Z"
+            fill="var(--short)" opacity="0.08"/>
+      <text x="6" y="60" font-size="10" fill="var(--dim)">$0</text>
+      <text x="806" y="130" font-size="11" fill="var(--short)" font-weight="600">−$1.24M</text>
+    </svg>
+  </div>
+
+  <!-- 4. DONUT ROW -->
+  <div class="donuts num">
+    <div class="card donut">
+      <svg viewBox="0 0 42 42" aria-hidden="true">
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--s2)" stroke-width="7"/>
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--amber)" stroke-width="7" stroke-dasharray="82 12" transform="rotate(-90 21 21)"/>
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--accent)" stroke-width="7" stroke-dasharray="10 84" stroke-dashoffset="-84" transform="rotate(-90 21 21)"/>
+      </svg>
+      <div>
+        <div class="lbl dim" style="font-size:11.5px">Perps position value</div>
+        <div class="big">$27.38M</div>
+        <div class="muted" style="font-size:12px">2 positions · aggregate 26.7x · <span style="color:var(--amber)">BTC 87%</span> · ZEC 13%</div>
+      </div>
+    </div>
+    <div class="card donut">
+      <svg viewBox="0 0 42 42" aria-hidden="true">
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--long)" stroke-width="7" stroke-dasharray="68 26" transform="rotate(-90 21 21)"/>
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--short)" stroke-width="7" stroke-dasharray="26 68" stroke-dashoffset="-68" transform="rotate(-90 21 21)"/>
+      </svg>
+      <div>
+        <div class="lbl dim" style="font-size:11.5px">Account total value</div>
+        <div class="big">$3.78M</div>
+        <div class="muted" style="font-size:12px">Perpetual $1.03M · Spot $2.75M</div>
+      </div>
+    </div>
+    <div class="card donut">
+      <svg viewBox="0 0 42 42" aria-hidden="true">
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--s2)" stroke-width="7"/>
+        <circle cx="21" cy="21" r="15" fill="none" stroke="var(--short)" stroke-width="7" stroke-dasharray="94 0" transform="rotate(-90 21 21)"/>
+      </svg>
+      <div>
+        <div class="lbl dim" style="font-size:11.5px">Free margin</div>
+        <div class="big">$0</div>
+        <div style="font-size:12px" class="neg">Withdrawable 0.0% · margin fully used</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. TABS + POSITIONS TABLE (all tabs PUBLIC; lazy-load per tab) -->
+  <div class="card panel">
+    <div class="tabs">
+      <span class="tab on">Positions</span><span class="tab">Transactions</span><span class="tab">Open orders</span>
+      <span class="tab">Deposit &amp; withdraw</span><span class="tab">Spot holdings</span><span class="tab">Funding</span>
+      <span class="tab">Order history</span><span class="tab">Extras</span><span class="tab">Activity · both venues</span>
+    </div>
+    <table class="num">
+      <thead><tr>
+        <th>Token</th><th>Side</th><th>Leverage</th><th class="r">Value</th><th class="r">Amount</th>
+        <th class="r">Entry</th><th class="r">Mark</th><th class="r">Liq price</th><th class="r">PnL</th>
+        <th class="r">Funding</th><th class="r">Opened</th><th></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td style="font-weight:600">BTC</td>
+          <td><span class="side neg">Short</span></td>
+          <td>30x isolated</td>
+          <td class="r">$23.83M</td>
+          <td class="r">−300.00</td>
+          <td class="r">79,017.5</td>
+          <td class="r">78,600.1</td>
+          <td class="r neg">80,688.2</td>
+          <td class="r neg" style="font-weight:600">−$125.8K · −15.8%</td>
+          <td class="r pos">+$507.74</td>
+          <td class="r">2d <span class="dim">≈</span></td>
+          <td class="dim">▸</td>
+        </tr>
+        <tr><td colspan="12" class="ctx">↳ against the 15-wallet crowd long near $78k · smart money net long BTC (SMI 66) · built over 4 adds, first fill ~$79.4k</td></tr>
+        <tr>
+          <td style="font-weight:600">ZEC</td>
+          <td><span class="side neg">Short</span></td>
+          <td>10x cross</td>
+          <td class="r">$3.55M</td>
+          <td class="r">−3,000</td>
+          <td class="r">1,180.81</td>
+          <td class="r">1,181.79</td>
+          <td class="r neg">1,781.19</td>
+          <td class="r neg" style="font-weight:600">−$2.97K · −0.84%</td>
+          <td class="r pos">+$88.87</td>
+          <td class="r">11h</td>
+          <td class="dim">▸</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="foot">
+      <span>Hyperliquid · as of 40s · full state</span>
+      <span>fills tab: last 2,000 shown · venue retains 10,000</span>
+    </div>
+  </div>
+
+  <!-- 6. PERPL SECTION — SAME LAYOUT, second venue -->
+  <div class="venue-h">
+    <h2>Perpl · account #2118</h2>
+    <span class="tag" style="background:var(--accent-soft); color:var(--accent-text)">all-time volume #3</span>
+    <span class="tag" style="background:var(--s2); color:var(--muted)">history indexed from 12 Mar · 64% backfilled</span>
+  </div>
+  <div class="card panel">
+    <table class="num">
+      <thead><tr>
+        <th>Token</th><th>Side</th><th class="r">Size</th><th class="r">Entry</th><th class="r">Mark</th>
+        <th class="r">Liq price <span class="dim">(formula)</span></th><th class="r">uPnL</th><th>TP/SL</th><th class="r">Opened</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td style="font-weight:600">BTC</td>
+          <td><span class="side pos">Long</span></td>
+          <td class="r">2.2721</td>
+          <td class="r">77,084.0</td>
+          <td class="r">78,144.3</td>
+          <td class="r neg">61,204.7</td>
+          <td class="r pos" style="font-weight:600">+$2.41K</td>
+          <td>SL 74,900 · <span class="dim">no TP</span></td>
+          <td class="r">5h</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="foot"><span>Perpl · on-chain state · as of 28s</span><span>Deposits, fills &amp; funding appear in Activity as the index backfills</span></div>
+  </div>
+</body>
+</html>
