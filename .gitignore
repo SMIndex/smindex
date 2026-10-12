@@ -1,0 +1,66 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+dist/
+frontend/dist/
+frontend/dist_*/
+.vite/
+*.tsbuildinfo
+package-lock.json
+!frontend/package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Logs, dumps, temp files
+*.log
+*.sql
+backend/tmp_*.js
+backend/tmp_*.json
+backend/account_data.json
+docker-compose.override.yml
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Internal material. It lives outside this repository and must never be committed.
+.claude/
+CLAUDE.md
+MEMORY.md
+audits/
+changelogs/
+research/
+indexer/
+backups/
+backup*/
+BKP*/
+docs/*
+!docs/SETUP.md
+*_REPORT.md
+*REPORT*.md
+*RUNBOOK*.md
+*AUDIT*.md
+frontend/audit_qqex/
+frontend/tests/out/
+backend/reports/
+backend/backtest/
+backend/deploy/
+backend/app - Copy/
+frontend/src - Copy/
+scripts/.cache/
+scripts/2/
+scripts/scripts.zip
