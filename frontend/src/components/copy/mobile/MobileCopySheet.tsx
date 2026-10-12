@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 import { useMarkets } from '@/hooks/useMarkets';
 import { COPY_LIVE_ENABLED } from '@/config/constants';
 import { shortenAddress } from '@/lib/formatters';
+import { useAuth } from '@/hooks/useAuth';
 import MarketLogo from '@/components/copy/mobile/marketLogos';
 import { portalRoot } from '@/design-b/portalRoot';
 import type { CreateSubscriptionPayload, CopySubscription } from '@/lib/copyApi';
@@ -70,6 +71,7 @@ export default function MobileCopySheet({ traderWallet, traderName, onSubmit, on
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const { isAuthenticated, login } = useAuth();
 
   const handleClose = useCallback(() => {
     if (closingRef.current) return;
@@ -110,6 +112,12 @@ export default function MobileCopySheet({ traderWallet, traderName, onSubmit, on
     const e = validate(form);
     setErrors(e);
     if (Object.keys(e).length > 0) return;
+    if (!isAuthenticated) {
+      await login();
+      let signedIn = false;
+      try { signedIn = !!JSON.parse(localStorage.getItem('perpl-auth') || '{}')?.state?.token; } catch { /* no session */ }
+      if (!signedIn) { setApiError('Sign in with your wallet first, then save.'); return; }
+    }
     const payload: CreateSubscriptionPayload = {
       trader_wallet: traderWallet,
       sizing_mode: 'fixed',

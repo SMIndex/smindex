@@ -36,6 +36,21 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // A refusal from the server can carry a list or an object instead of a
+    // sentence. Screens print it as text, so turn it into one here.
+    const data = error.response?.data;
+    const d = data?.detail;
+    if (data && typeof data === 'object' && d != null && typeof d !== 'string') {
+      const missingAuth = Array.isArray(d) && d.some((x: any) =>
+        Array.isArray(x?.loc) && x.loc[0] === 'header' && String(x.loc[1]).toLowerCase() === 'authorization');
+      data.detail = missingAuth
+        ? 'Sign in with your wallet first.'
+        : Array.isArray(d)
+          ? d.map((x: any) => x?.msg
+            ? `${(x.loc || []).filter((p: any) => p !== 'body').join('.')}: ${x.msg}`
+            : JSON.stringify(x)).join('; ')
+          : JSON.stringify(d);
+    }
     if (error.response?.status === 401) {
       try { localStorage.removeItem('perpl-auth'); } catch {}
       window.dispatchEvent(new CustomEvent('auth_expired'));

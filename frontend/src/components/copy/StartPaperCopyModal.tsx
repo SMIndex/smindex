@@ -4,6 +4,7 @@ import Modal from '@/components/common/Modal';
 import { COPY_LIVE_ENABLED } from '@/config/constants';
 import { useMarkets } from '@/hooks/useMarkets';
 import { shortenAddress } from '@/lib/formatters';
+import { useAuth } from '@/hooks/useAuth';
 import type { CreateSubscriptionPayload, CopySubscription } from '@/lib/copyApi';
 
 interface Props {
@@ -50,6 +51,7 @@ export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, tra
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const { isAuthenticated, login } = useAuth();
 
   // Default allowed_markets to ALL active markets once the registry loads (only
   // while the user hasn't picked anything). Never falls back to a hardcoded list.
@@ -96,6 +98,12 @@ export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, tra
     const e = validate();
     setErrors(e);
     if (Object.keys(e).length > 0) return;
+    if (!isAuthenticated) {
+      await login();
+      let signedIn = false;
+      try { signedIn = !!JSON.parse(localStorage.getItem('perpl-auth') || '{}')?.state?.token; } catch { /* no session */ }
+      if (!signedIn) { setApiError('Sign in with your wallet first, then save.'); return; }
+    }
 
     const payload: CreateSubscriptionPayload = {
       trader_wallet: traderWallet,
