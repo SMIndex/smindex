@@ -362,6 +362,7 @@ export default function AnalyticsAssetB() {
           {(flowsQ.data?.events?.length ?? 0) === 0 ? (
             <div className="empty">Flow builds up over the next few sweep cycles</div>
           ) : (
+            <div className="postable-wrap">
             <table>
               <thead><tr><th>Wallet</th><th>Action</th><th>Detail</th><th className="r">Size change</th><th className="r">When</th></tr></thead>
               <tbody>
@@ -380,6 +381,7 @@ export default function AnalyticsAssetB() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
           {(flowsQ.data?.events?.length ?? 0) > flowLimit && (
             <div style={{ marginTop: 12 }}><button className="btn sm" onClick={() => setFlowLimit((n) => n + 20)}>Show 20 more</button></div>
