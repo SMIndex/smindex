@@ -1,9 +1,22 @@
 import logging
+import re
 import sys
 
 from app.config import settings
 
 _configured = False
+
+_URL_TOKEN = re.compile(r"([?&]token=)[^&\s\"]+")
+
+
+class _HideUrlTokens(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _URL_TOKEN.sub(lambda m: m.group(1) + "(hidden)", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
 
 
 def _configure_logging() -> None:
@@ -32,6 +45,8 @@ def _configure_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # uvicorn logs every accepted WebSocket with its full URL, session token included
+    logging.getLogger("uvicorn.error").addFilter(_HideUrlTokens())
 
     _configured = True
 
