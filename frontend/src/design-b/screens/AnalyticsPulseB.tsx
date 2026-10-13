@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getPulse, type PulseTile } from '@/lib/analyticsApi';
 import { humanUsd } from '@/lib/analyticsCopy';
+import { getMarkets } from '@/lib/api';
 import MobileSheetB from '../MobileSheetB';
 
 // Design B Analytics: Pulse table (spec §3.4). SAME data as shell A's
@@ -20,6 +21,10 @@ function relAge(iso: string | null): string {
 }
 
 type Lean = 'long' | 'short' | 'flat';
+type Scope = 'perpl' | 'crypto' | 'rwa' | 'all';
+const SCOPES: [Scope, string][] = [['perpl', 'On Perpl'], ['crypto', 'Crypto'], ['rwa', 'RWA'], ['all', 'All']];
+// Builder-dex assets carry a "dex:" prefix (stocks, commodities, indexes); core listings do not.
+const isRwa = (asset: string) => asset.includes(':');
 const leanOf = (t: PulseTile): Lean =>
   t.stance === 'net_long' ? 'long' : t.stance === 'net_short' ? 'short' : 'flat';
 
@@ -30,12 +35,22 @@ export default function AnalyticsPulseB() {
   const d = q.data;
   const tiles = d?.tiles ?? [];
 
+  const [scope, setScope] = useState<Scope>('perpl');
+  const mq = useQuery({ queryKey: ['markets'], queryFn: getMarkets, staleTime: 60_000 });
+  const perpl = new Set((mq.data ?? []).map((m) => String(m.symbol).toUpperCase()));
+  // The Perpl list is live; if it cannot be read, show everything instead of an empty page.
+  const eff: Scope = scope === 'perpl' && mq.isError ? 'all' : scope;
+  const inScope = (t: PulseTile) =>
+    eff === 'all' ? true : eff === 'rwa' ? isRwa(t.asset) : eff === 'crypto' ? !isRwa(t.asset) : perpl.has(t.asset.toUpperCase());
+
   const sorted = [...tiles].sort((a, b) => b.smi - a.smi);
-  const rows = sorted.filter((t) => f === 'all' || leanOf(t) === f);
-  const nl = tiles.filter((t) => leanOf(t) === 'long').length;
-  const ns = tiles.filter((t) => leanOf(t) === 'short').length;
-  const nb = tiles.filter((t) => leanOf(t) === 'flat').length;
-  const top = sorted[0];
+  const scoped = sorted.filter(inScope);
+  const rows = scoped.filter((t) => f === 'all' || leanOf(t) === f);
+  const nl = scoped.filter((t) => leanOf(t) === 'long').length;
+  const ns = scoped.filter((t) => leanOf(t) === 'short').length;
+  const nb = scoped.filter((t) => leanOf(t) === 'flat').length;
+  const top = scoped[0];
+  const scopeLabel = SCOPES.find(([k]) => k === eff)![1];
 
   return (
     <div className="screen">
@@ -44,8 +59,13 @@ export default function AnalyticsPulseB() {
           <h1>Analytics</h1>
           <p>Every asset the cohort holds, ranked by Smart Money Index. Click an asset for the full breakdown.</p>
         </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <MobileSheetB label="Filter" title="Show assets" summary={f === 'all' ? 'All' : f === 'long' ? 'Net long' : 'Net short'}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <MobileSheetB label="Filter" title="Show assets" summary={`${scopeLabel}${f === 'all' ? '' : f === 'long' ? ', net long' : ', net short'}`}>
+            <div className="seg">
+              {SCOPES.map(([k, label]) => (
+                <button key={k} aria-pressed={eff === k} onClick={() => setScope(k)}>{label}</button>
+              ))}
+            </div>
             <div className="seg">
               {(['all', 'long', 'short'] as const).map((k) => (
                 <button key={k} aria-pressed={f === k} onClick={() => setF(k)}>
@@ -74,7 +94,7 @@ export default function AnalyticsPulseB() {
 
       <div className="ptable">
         {rows.length === 0 ? (
-          <div className="empty" style={{ margin: 16 }}>{q.isLoading ? 'Loading assets' : q.isError && !d ? 'Analytics is unavailable right now, retrying every minute.' : 'No assets match this filter'}</div>
+          <div className="empty" style={{ margin: 16 }}>{q.isLoading || (eff === 'perpl' && mq.isLoading) ? 'Loading assets' : q.isError && !d ? 'Analytics is unavailable right now, retrying every minute.' : 'No assets match this filter'}</div>
         ) : (
           <table>
             <thead>
