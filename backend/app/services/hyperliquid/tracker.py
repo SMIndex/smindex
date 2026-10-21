@@ -72,6 +72,15 @@ _mm_wallets: set[str] = set()
 # ranked FIRST for the 10 real-time ws slots (spec D4), never MM-suppressed.
 _auto_copy_leaders: set[str] = set()
 _poll_req_window: list[float] = []
+# Newest fill time (ms) seen per tracked wallet, every fill incl. the ws
+# snapshot and market-maker increase/reduce rows that are not persisted.
+# Read by hl/last_trade.py for the Discover "last active" (zero requests).
+last_fill_ms: dict[str, int] = {}
+
+
+def _note_fill_time(wallet: str, ms: int | None) -> None:
+    if ms and ms > last_fill_ms.get(wallet, 0):
+        last_fill_ms[wallet] = ms
 
 
 def get_stats() -> dict:
@@ -410,6 +419,10 @@ def _strategy_assets() -> set[str]:
 async def _handle_fills(wallet: str, fills: list[dict], is_snapshot: bool) -> None:
     seen = _seen_tids.setdefault(wallet, set())
     for f in fills:
+        try:
+            _note_fill_time(wallet, int(f.get("time") or 0))
+        except (TypeError, ValueError):
+            pass
         tid = f.get("tid") or f.get("hash") or f"{f.get('oid')}:{f.get('time')}"
         if f.get("liquidation"):
             try:
@@ -554,6 +567,9 @@ async def _poll_wallet(wallet: str) -> None:
     _poll_baseline[wallet] = positions
     if old is None:
         return  # first sighting: silent baseline
+    if any(abs(p["szi"] - (old.get(c) or {}).get("szi", 0)) > abs(p["szi"]) * 1e-4 for c, p in positions.items()) \
+            or any(c not in positions for c in old):
+        _note_fill_time(wallet, int(time.time() * 1000))   # poll tier: detection time
 
     for coin, pos in positions.items():
         side = "long" if pos["szi"] > 0 else "short"

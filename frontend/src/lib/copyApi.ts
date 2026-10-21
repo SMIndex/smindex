@@ -41,6 +41,8 @@ export interface TraderListItem extends ActivePositionSummary {
   is_verified: boolean;
   source: string;
   last_fill_at?: string | null;   // ISO UTC of the most recent detected fill
+  last_trade_at?: string | null;  // HL: newest real fill (wallet + sub-accounts)
+  last_trade_src?: 'live' | 'hourly' | null;
   activity?: TraderActivity | null;
   fill_stats?: TraderFillStats | null;
 }

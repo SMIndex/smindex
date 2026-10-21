@@ -41,6 +41,7 @@ export interface ViewRow {
   active_positions_pending?: boolean;
   has_active_positions?: boolean;
   last_fill_at?: string | null;
+  last_trade_at?: string | null;
   activity?: { last_active_at?: string | null } | null;
 }
 
@@ -91,6 +92,9 @@ export function filtersActive(v: DiscoverView): boolean {
 // last_fill_at is a detected fill time. The fill wins when it is newer, or when it
 // falls on the day a day-precise snapshot time stands for. The row shows this too.
 export function lastActiveIso(t: ViewRow): string | null {
+  // Hyperliquid rows carry the newest real fill (tracker, else the hourly read
+  // over the wallet and its sub-accounts): that is the answer when present.
+  if (t.last_trade_at) return t.last_trade_at;
   const la = t.activity?.last_active_at || null;
   const lf = t.last_fill_at || null;
   if (!la || !lf) return la || lf;

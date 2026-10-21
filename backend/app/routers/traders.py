@@ -84,11 +84,29 @@ async def list_traders(
     active-position column is re-attached per request."""
     exch = _exchange(exchange)          # validate before the key, so PERPL and perpl share one entry
     if wallets:
-        return await _build_trader_list(skip, limit, sort, period, exch, with_positions, wallets)
+        return _attach_hl_last_trade(
+            await _build_trader_list(skip, limit, sort, period, exch, with_positions, wallets), exch)
     key = (exch, period, sort, skip, limit, with_positions)
     rows = await _list_cache.get(
         key, lambda: _build_trader_list(skip, limit, sort, period, exch, with_positions, None))
-    return _attach_active_positions(rows, exch, with_positions)
+    return _attach_hl_last_trade(_attach_active_positions(rows, exch, with_positions), exch)
+
+
+def _attach_hl_last_trade(rows: list[dict], exchange: str) -> list[dict]:
+    """HL rows: the newest real fill time (tracker live, else the hourly read
+    over the wallet and its sub-accounts), attached per request from memory so
+    the 60 s list cache never ages it. Shallow copies; the cache is untouched."""
+    if exchange != "hl" or not rows:
+        return rows
+    from app.services.hyperliquid import last_trade
+    out = []
+    for r in rows:
+        ms, src = last_trade.last_trade(r["wallet_address"])
+        t = dict(r)
+        t["last_trade_at"] = last_trade.iso(ms) if ms else None
+        t["last_trade_src"] = src
+        out.append(t)
+    return out
 
 
 def _attach_active_positions(rows: list[dict], exchange: str, with_positions: bool) -> list[dict]:

@@ -255,6 +255,10 @@ async def _loop() -> None:
                 await activity_metrics.run()
             except Exception:
                 logger.exception("activity metrics failed (non-fatal)")
+            # Discover "last active": newest real fill of each listed wallet
+            # (+ sub-accounts), paced in the background, once per ingest.
+            from app.services.hyperliquid import last_trade
+            last_trade.start_refresh()
         except Exception as exc:
             logger.warning("HL leaderboard ingest failed (%s), retrying in %ss",
                            exc, RETRY_DELAY_SEC)
