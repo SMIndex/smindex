@@ -37,7 +37,7 @@ test('filters match a plain count on the same rows', () => {
   const r = applyView(rows, v({ minReturn: 50, minProfit: 10_000, minVolume: 1_000_000 }), now).rows;
   assert.equal(r.length, rows.filter((t: any) => t.roi >= 50 && t.pnl_total >= 10_000 && t.volume >= 1_000_000).length);
   const open = applyView(rows, v({ open: true })).rows;
-  assert.equal(open.length, rows.filter((t: any) => t.has_active_positions || t.active_positions_pending).length);
+  assert.equal(open.length, rows.filter((t: any) => t.has_active_positions).length);
   const act = applyView(rows, v({ active: '7d' }), now).rows;
   for (const t of act) {
     const iso = t.activity?.last_active_at || t.last_fill_at;

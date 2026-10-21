@@ -126,7 +126,8 @@ export function applyView<T extends ViewRow>(rows: T[], v: DiscoverView, now = D
       const ms = lastActiveMs(t);
       if (ms == null || now - ms > ACTIVE_MS[v.active]) return false;
     }
-    if (v.open && !(t.has_active_positions || t.active_positions_pending)) return false;
+    // only rows known to hold positions: a count still loading is not shown as open
+    if (v.open && !t.has_active_positions) return false;
     if (v.sort === 'return' && !v.small && !(t.pnl_total >= SMALL_PROFIT_USD)) { smallHidden++; return false; }
     return true;
   });
