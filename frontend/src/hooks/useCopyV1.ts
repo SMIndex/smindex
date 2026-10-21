@@ -120,7 +120,13 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
         ...(wallets ? { wallets } : {}) });
       // Render rows IMMEDIATELY: open-position summaries attach afterwards
       // (non-blocking; same progressive contract as Perpl's fields).
-      setTraders((prev) => (replace ? data : mergeTraders(prev, data)));
+      // HL rows come back without open-position fields (they arrive from the batch
+      // below); keep each row's last known ones meanwhile, or every refresh shows
+      // 0 open for seconds and the "Has open positions" filter empties.
+      setTraders((prev) => {
+        const rows = exchange === 'hl' ? keepHlPositions(prev, data) : data;
+        return replace ? rows : mergeTraders(prev, rows);
+      });
       if (data.length) writeDiscoverSnap(discoverSnapKey({ exchange, sort, period, limit, wallets }), data);
       if (exchange === 'hl' && data.length) {
         copyApi.getHlActiveBatch(data.map((t) => t.wallet_address)).then((batch) => {
@@ -173,6 +179,23 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
   }, [anyPending, load]);
 
   return { traders, loading, fetching, error, refresh: load };
+}
+
+function keepHlPositions(prev: TraderListItem[], next: TraderListItem[]): TraderListItem[] {
+  if (!prev.length) return next;
+  const byWallet = new Map(prev.map((t) => [t.wallet_address.toLowerCase(), t]));
+  return next.map((t) => {
+    const p = byWallet.get(t.wallet_address.toLowerCase());
+    if (!p || p.active_positions_count === undefined || t.active_positions_count !== undefined) return t;
+    return {
+      ...t,
+      active_positions_count: p.active_positions_count,
+      active_markets: p.active_markets,
+      has_active_positions: p.has_active_positions,
+      active_positions_pending: p.active_positions_pending,
+      active_positions_error: p.active_positions_error,
+    };
+  });
 }
 
 /** Merge fresh trader data into the previous array, keeping previous order and reusing

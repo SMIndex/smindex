@@ -88,7 +88,12 @@ ours_p = j(f"{SITE}/api/traders", params={"sort": "pnl", "period": "all", "limit
 ours_h = j(f"{SITE}/api/traders", params={"sort": "pnl", "period": "all", "limit": 50, "exchange": "hl"})
 pick_p = rng.sample(ours_p, 5)
 pick_h = rng.sample(ours_h, 5)
-hl_act = j(f"{SITE}/api/traders/hl-active", params={"wallets": ",".join(t["wallet_address"] for t in pick_h)})
+# The page shows a loading mark while the server reads a cold wallet and fills it on the next poll; wait the same way.
+for _ in range(12):
+    hl_act = j(f"{SITE}/api/traders/hl-active", params={"wallets": ",".join(t["wallet_address"] for t in pick_h)})
+    if not any(v.get("pending") for v in hl_act.values()):
+        break
+    time.sleep(5)
 
 # ---------------- Perpl ----------------
 board = {e["a"].lower(): e for e in j(f"{PERPL}/api/v1/trading/leaderboard/all/pnl").get("d", [])}
