@@ -107,11 +107,23 @@ class ClientManager:
 client_manager = ClientManager()
 
 
-async def client_feed_endpoint(websocket: WebSocket) -> None:
-    # Authenticate via token query param
-    token = websocket.query_params.get("token")
-    user_id: str | None = None
+AUTH_WAIT_S = 5.0
 
+
+def _auth_frame_token(msg: Any) -> tuple[bool, str | None]:
+    """(is an auth frame, token). The page's first frame is {"type": "auth", "token": t},
+    with token null for a guest, so the session token never travels in the URL."""
+    if isinstance(msg, dict) and msg.get("type") == "auth":
+        t = msg.get("token")
+        return True, t if isinstance(t, str) and t else None
+    return False, None
+
+
+async def client_feed_endpoint(websocket: WebSocket) -> None:
+    user_id: str | None = None
+    # TODO(2026-10-28): remove this legacy ?token= path and the no-auth-frame
+    # fallback below. They exist only for tabs opened before 2026-10-21.
+    token = websocket.query_params.get("token")
     if token:
         try:
             payload = verify_jwt(token)
@@ -121,12 +133,42 @@ async def client_feed_endpoint(websocket: WebSocket) -> None:
             return
 
     await websocket.accept()
+    pending: str | None = None
+    if not token:
+        # Wait up to 5 s for the auth frame; a socket that says nothing is closed.
+        try:
+            first = await asyncio.wait_for(websocket.receive_text(), AUTH_WAIT_S)
+        except asyncio.TimeoutError:
+            await websocket.close(code=4401, reason="Auth frame required")
+            return
+        except WebSocketDisconnect:
+            return
+        try:
+            msg = json.loads(first)
+        except json.JSONDecodeError:
+            msg = None
+        is_auth, frame_token = _auth_frame_token(msg)
+        if is_auth:
+            if frame_token:
+                try:
+                    user_id = verify_jwt(frame_token).get("sub")
+                except ValueError:
+                    await websocket.close(code=4001, reason="Invalid token")
+                    return
+            await websocket.send_text(json.dumps({"authenticated": bool(user_id)}))
+        else:
+            # Legacy guest tab (before 2026-10-21): its first frame is a subscribe.
+            pending = first
+
     conn = ClientConnection(websocket, user_id)
     await client_manager.add(conn)
 
     try:
         while True:
-            raw = await websocket.receive_text()
+            if pending is not None:
+                raw, pending = pending, None
+            else:
+                raw = await websocket.receive_text()
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:

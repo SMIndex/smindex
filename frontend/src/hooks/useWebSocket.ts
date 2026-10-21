@@ -94,10 +94,12 @@ function ensureSocket(token: string | null) {
   if (sharedWs && sharedToken === token) return;
   sharedWs?.close();
   sharedToken = token;
-  const url = token ? `${WS_BASE}/ws/feed?token=${token}` : `${WS_BASE}/ws/feed`;
-  const ws = new ReconnectingWebSocket(url, {
+  // The token goes in the first frame, never in the URL: URLs end up in server
+  // logs. The server closes a socket that sends no auth frame within 5 s.
+  const ws = new ReconnectingWebSocket(`${WS_BASE}/ws/feed`, {
     onMessage: dispatchMessage,
     onOpen: () => {
+      ws.send({ type: 'auth', token: token || null });
       desiredSubs.forEach((sub) => ws.send({ subscribe: sub.channel, ...sub.params }));
     },
   });
