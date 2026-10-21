@@ -52,8 +52,14 @@ api.interceptors.response.use(
           : JSON.stringify(d);
     }
     if (error.response?.status === 401) {
+      // Only the first 401 of an expired session finds a token: one prompt, no loop.
+      const hadToken = !!getStoredToken();
       try { localStorage.removeItem('perpl-auth'); } catch {}
       window.dispatchEvent(new CustomEvent('auth_expired'));
+      if (hadToken) {
+        import('@/components/common/Toast').then(({ useToastStore }) =>
+          useToastStore.getState().addToast('warning', 'Your session expired. Sign in again.'));
+      }
     }
     return Promise.reject(error);
   },

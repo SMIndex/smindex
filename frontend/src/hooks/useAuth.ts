@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect, useRef } from 'react';
 import { useConnect, useDisconnect, useAccount, useSignMessage } from 'wagmi';
 import { useAuthStore } from '@/stores/authStore';
 import { postAuthPayload, postAuthConnect } from '@/lib/api';
+import { createSessionRefresher } from '@/lib/sessionRefresh';
 
 let _sessionRefreshed = false;
 
@@ -39,11 +40,15 @@ export function useAuth() {
   useEffect(() => {
     if (!token || !_hydrated || _sessionRefreshed) return;
     _sessionRefreshed = true;
-    import('@/lib/api').then(({ default: api }) => api.post('/api/auth/refresh'))
-      .then((r: any) => {
-        if (r?.data?.refreshed && r.data.token && user) setAuth(r.data.token, user);
-      })
-      .catch(() => { /* a failed refresh changes nothing: the token still works until it expires */ });
+    // At most one try, then 30 s / 2 min / 10 min, then stop (2026-10-21).
+    // A 401 is handled by the api layer: session cleared, one sign-in prompt.
+    createSessionRefresher({
+      post: () => import('@/lib/api').then(({ default: api }) => api.post('/api/auth/refresh')),
+      onRefreshed: (d) => {
+        if (d?.refreshed && d.token && user) setAuth(d.token, user);
+      },
+      onExpired: () => {},
+    }).start();
   }, [token, _hydrated, user, setAuth]);
 
   const doSiweAuth = async (walletAddress: string) => {
