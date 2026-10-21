@@ -178,7 +178,7 @@ export function FlowRow({ e }: { e: FlowRowEvent }) {
             title={e.ref_px_approx ? 'Approximate reference price (sweep resolution does not see the true fill)' : 'Reference price'}>
         {e.ref_px != null ? `${e.ref_px_approx ? '~' : ''}${e.ref_px >= 100 ? e.ref_px.toFixed(1) : e.ref_px.toFixed(4)}` : ''}
       </span>
-      <span className="text-[10px] px-1 rounded" title={e.resolution === 'ws' ? 'Real-time fill (tracker websocket)' : 'Sweep resolution (about every 35 minutes)'}
+      <span className="text-[10px] px-1 rounded" title={e.resolution === 'ws' ? 'Real-time fill (tracker websocket)' : 'Sweep resolution (about every 20 minutes)'}
             style={{ border: '1px solid var(--border)', color: 'var(--faint)' }}>
         {e.resolution === 'ws' ? 'live' : 'sweep'}
       </span>

@@ -52,6 +52,9 @@ logger = get_logger(__name__)
 INFO_URL = "https://api.hyperliquid.xyz/info"
 HARD_CEILING = 1200                 # the venue's per-IP limit: never crossed
 INTERACTIVE_HEADROOM = 150          # top of the soft budget reserved for explorer
+# 2026-10-21 (owner): at least 30 % of the venue budget stays free for explorer
+# and copy trade at all times, so background work never passes 70 % of it.
+RESERVE_FREE_FRACTION = 0.30
 WINDOW_SEC = 60.0
 
 # priority classes, highest first
@@ -164,8 +167,23 @@ def _class_ceiling(cls: str) -> float:
     if cls == CRITICAL:
         return HARD_CEILING
     if cls == BACKGROUND:
-        return max(soft - INTERACTIVE_HEADROOM, 0)
+        return max(min(soft - INTERACTIVE_HEADROOM, background_cap()), 0)
     return soft
+
+
+def background_cap() -> int:
+    return int(HARD_CEILING * (1 - RESERVE_FREE_FRACTION))
+
+
+def window_used() -> float:
+    """Weight in the rolling 60 s window right now (all classes)."""
+    return _window.used()
+
+
+def pressure_counts() -> tuple[int, int]:
+    """(shed, 429) totals since start, all classes. Callers diff two reads."""
+    return (sum(s["shed"] for s in _stats.values()),
+            sum(s["http_429"] for s in _stats.values()))
 
 
 def _get_client() -> httpx.AsyncClient:

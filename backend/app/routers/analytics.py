@@ -726,7 +726,7 @@ async def _big_threshold(s) -> float | None:
 
 # ---- D-113 + beta speed pass: background warmer ---------------------------
 # The analytics payloads cache on the sweep cycle, so the FIRST request after
-# each new cycle (every ~35 min) paid the full rebuild, measured at 23.6 s for
+# each new cycle (every ~20 min) paid the full rebuild, measured at 23.6 s for
 # /pulse, on the single uvicorn worker, blocking every other request behind it.
 # That is what users experienced as "analytics is slow": not every load, just
 # the unlucky one. This task rebuilds as soon as a new cycle lands:

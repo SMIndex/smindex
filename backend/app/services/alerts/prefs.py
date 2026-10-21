@@ -53,17 +53,17 @@ ALERT_TYPES: dict[str, dict] = {
     "smi_cross": {
         "group": "smart_money", "label": "SMI crosses a level on an asset I watch", "default": False,
         "params": {"above": 70, "below": 30, "assets": []},
-        "delay": "About every 35 min (each analytics cycle). Empty asset list = the assets you hold.",
+        "delay": "About every 20 min (each analytics cycle). Empty asset list = the assets you hold.",
     },
     "watched_wallet": {
         "group": "smart_money", "label": "A watched wallet opens or closes", "default": True,
         "params": {"min_notional_usd": 50000},
-        "delay": "Seconds for live-tracked wallets; up to about 35 min for the rest.",
+        "delay": "Seconds for live-tracked wallets; up to about 20 min for the rest.",
     },
     "crowded_trade": {
         "group": "smart_money", "label": "Crowded trade warning on an asset I hold", "default": False,
         "params": {},
-        "delay": "About every 35 min (each analytics cycle), at most once a day per asset.",
+        "delay": "About every 20 min (each analytics cycle), at most once a day per asset.",
     },
     # --- Summary ---
     "daily_summary": {

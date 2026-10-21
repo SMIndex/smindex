@@ -52,8 +52,8 @@ export default function SmartMoneyContext({ asset, side }: {
       <div className="flex items-center justify-between mb-1">
         <span className="text-[10px] uppercase tracking-wide text-text-secondary/50">Smart money context</span>
         <span className="text-[9.5px] text-text-secondary/40"
-              title="From the analytics full-cohort sweep, about every 35 minutes (top HL leaderboard wallets, MMs excluded). Descriptive context only: it does not gate this order.">
-          {ageMin != null ? `as of ${ageMin < 1 ? 'now' : `${ageMin}m ago`} · ~35m sweep` : '~35m sweep'}
+              title="From the analytics full-cohort sweep, about every 20 minutes (top HL leaderboard wallets, MMs excluded). Descriptive context only: it does not gate this order.">
+          {ageMin != null ? `as of ${ageMin < 1 ? 'now' : `${ageMin}m ago`} · ~20m sweep` : '~20m sweep'}
         </span>
       </div>
       <div className="text-[11px] text-text-secondary leading-relaxed">

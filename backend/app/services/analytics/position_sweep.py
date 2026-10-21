@@ -1,6 +1,11 @@
 """Full-cohort position snapshot sweep (ANALYTICS_BUILD_REPORT Phase 1.2).
 
-Lifespan task. Every cycle (default 20 min):
+Lifespan task. A cycle STARTS every 20 min (start to start, 2026-10-21; it
+used to sleep 20 min AFTER a ~14 min cycle, so ~34 min apart). A slot that
+comes while the previous cycle still runs is skipped, never overlapped. More
+shed or 429 answers from Hyperliquid during a cycle stretch the interval 1.5x
+(logged); a clean cycle steps it back. Fetches also wait while the venue window
+is above 70 % so 30 % stays free for explorer and copy trade. Every cycle:
   1. cohort.ensure()/refresh gives the ranked top-400 wallet list
   2. per wallet, cheapest honest source wins:
        a. HL tracker poll-baseline fresh (<60s)  -> source 'ws'   (0 requests;
@@ -57,6 +62,7 @@ REQUEST_BUDGET = 430                # HARD cap venue requests per cycle.
 PAUSE_SEC = 1.2                     # between fetches (fill-stats discipline)
 RATE_LIMIT_BACKOFF_SEC = 20         # one backoff; second 429 halts the cycle
 TRACKER_FRESH_SEC = 60.0            # poll-baseline age accepted as live
+WINDOW_GUARD_POLL_SEC = 1.0         # re-check while the venue window is above 70 %
 DEGRADED_MAX_INTERVAL = 3600
 RETENTION_POSITIONS_FULL_DAYS = 14
 RETENTION_POSITIONS_DAILY_DAYS = 90
@@ -257,6 +263,7 @@ async def run_cycle() -> dict:
     global _baseline_done, _resume_queue, _current_interval
     t0 = time.monotonic()
     cycle_ts = datetime.utcnow().replace(microsecond=0)
+    shed0, r429_0 = hl_client.pressure_counts()
 
     await cohort.ensure()
     ranked = cohort.wallets()
@@ -305,6 +312,8 @@ async def run_cycle() -> dict:
         parts: list[tuple[str | None, dict]] = []
         limited = failed = False
         for d in fetches:
+            while hl_client.window_used() + 2 > hl_client.background_cap():
+                await asyncio.sleep(WINDOW_GUARD_POLL_SEC)
             requests_used += 1   # reserved BEFORE the attempt (budget is hard)
             try:
                 sc, state = await _fetch_state(w, d)
@@ -467,7 +476,15 @@ async def run_cycle() -> dict:
     retention = await _run_retention()
 
     # ---- degradation path ----
-    if halted:
+    shed1, r429_1 = hl_client.pressure_counts()
+    pressure = (shed1 - shed0) + (r429_1 - r429_0)
+    if pressure > 0 and not halted:
+        prev_iv = _current_interval
+        _current_interval = min(int(_current_interval * 1.5), DEGRADED_MAX_INTERVAL)
+        logger.warning("position sweep: %d shed + %d 429 from Hyperliquid during the cycle: "
+                       "interval %ds -> %ds", shed1 - shed0, r429_1 - r429_0,
+                       prev_iv, _current_interval)
+    elif halted:
         prev_iv = _current_interval
         _current_interval = min(int(_current_interval * 1.5), DEGRADED_MAX_INTERVAL)
         if _current_interval != prev_iv:
@@ -475,9 +492,10 @@ async def run_cycle() -> dict:
                            "left: interval %ds -> %ds", len(_resume_queue),
                            prev_iv, _current_interval)
     elif _current_interval != INTERVAL_SEC:
+        prev_iv = _current_interval
+        _current_interval = max(int(_current_interval / 1.5), INTERVAL_SEC)
         logger.info("position sweep recovered: interval %ds -> %ds",
-                    _current_interval, INTERVAL_SEC)
-        _current_interval = INTERVAL_SEC
+                    prev_iv, _current_interval)
 
     stats = {
         "cycle_ts": cycle_ts.isoformat(), "cohort": len(ranked),
@@ -491,7 +509,7 @@ async def run_cycle() -> dict:
         "wallet_state_rows": len(ws_rows), "trigger_checked": trig_checked,
         "trigger_obs": trig_obs, "halted": halted,
         "rolled_to_next": len(_resume_queue), "retention": retention,
-        "interval_sec": _current_interval,
+        "interval_sec": _current_interval, "hl_shed_429": pressure,
         "duration_sec": round(time.monotonic() - t0, 1),
     }
     _last_run.clear()
@@ -759,6 +777,7 @@ async def _run_retention() -> dict:
 async def _loop() -> None:
     await asyncio.sleep(FIRST_RUN_DELAY_SEC)
     while True:
+        started = time.monotonic()
         try:
             await cohort.refresh()
         except Exception:
@@ -767,7 +786,19 @@ async def _loop() -> None:
             await run_cycle()
         except Exception:
             logger.exception("position sweep cycle failed: next attempt on schedule")
-        await asyncio.sleep(_current_interval)
+        await asyncio.sleep(next_start_delay(started, time.monotonic(), _current_interval))
+
+
+def next_start_delay(started: float, now: float, interval: float) -> float:
+    """Seconds until the next slot, start to start. Slots that passed while the
+    cycle ran are skipped (logged), so cycles never overlap or run back to back."""
+    nxt = started + interval
+    if now >= nxt:
+        missed = int((now - nxt) // interval) + 1
+        logger.warning("position sweep: cycle ran %.0fs, %d slot(s) skipped",
+                       now - started, missed)
+        nxt += missed * interval
+    return nxt - now
 
 
 def start() -> None:
