@@ -27,11 +27,14 @@ export default function LiveDot({ account, className, label = 'live' }: {
   const never = age === 0;
   const stale = age > 60_000;
   const failing = !!account.error;
+  const noAccount = account.noPerplAccount && !failing;
   const color = failing ? 'var(--danger, #ef4444)'
+    : noAccount ? 'var(--faint, #9aa)'
     : never ? 'var(--faint, #9aa)'
       : stale ? 'var(--warning, #f59e0b)'
         : 'var(--success, #22c55e)';
   const text = failing ? 'read failed'
+    : noAccount ? 'no Perpl account'
     : never ? 'connecting'
       : age < 1500 ? label
         : `${label} · ${age < 60_000 ? `${Math.round(age / 1000)}s` : `${Math.round(age / 60_000)}m`}`;
@@ -40,6 +43,7 @@ export default function LiveDot({ account, className, label = 'live' }: {
     <span
       className={className}
       title={failing ? String(account.error)
+        : noAccount ? 'This wallet has no Perpl account yet. Deposit on Perpl to start trading.'
         : `Updated ${never ? 'never' : `${Math.round(age / 1000)}s ago`}. Positions and balance come from Perpl's own account stream; a chain read checks them every 30s.`}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5,

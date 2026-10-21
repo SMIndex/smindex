@@ -82,6 +82,8 @@ export interface AccountState {
   recentFills: VenueFill[];
   loading: boolean;
   error: string | null;
+  /** The server says this wallet has never opened a Perpl account: not an error. */
+  noPerplAccount: boolean;
 }
 
 const EMPTY: AccountState = {
@@ -89,6 +91,7 @@ const EMPTY: AccountState = {
   unrealizedPnl: 0, accountValue: 0, positions: [], chainOrders: [], triggers: [],
   venueSession: false, venueAccountMismatch: null, at: 0, updatedAt: 0,
   venueFrameAt: 0, lifetime: null, recentFills: [], loading: false, error: null,
+  noPerplAccount: false,
 };
 
 let state: AccountState = { ...EMPTY };
@@ -314,6 +317,12 @@ async function readChain(): Promise<void> {
   const wallet = state.wallet;
   if (!wallet) return;
   const resp = await fetch(`/api/leaders/positions/${wallet}?fresh=1`);
+  if (resp.status === 404) {
+    // 404 here means only "no Perpl account for this wallet" (leaders.py): an
+    // empty account to show calmly, not a failed read.
+    state = { ...state, noPerplAccount: true, positions: [], chainOrders: [], at: Date.now(), loading: false, error: null };
+    return;
+  }
   if (!resp.ok) throw new Error(`account read failed (${resp.status})`);
   const d = await resp.json();
   const positions = (d.positions ?? []).map(mapPosition);
@@ -360,6 +369,7 @@ async function readChain(): Promise<void> {
     at: Date.now(),
     loading: false,
     error: null,
+    noPerplAccount: false,
   };
 }
 

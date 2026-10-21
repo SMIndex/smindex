@@ -79,6 +79,15 @@ export default function MobilePositionCards({ account, ensureConnected, onlyMark
     }
   };
 
+  if (!positions.length && account.noPerplAccount) {
+    return (
+      <div className="mpos none" data-testid="mobile-positions-empty">
+        No Perpl account yet. <a href="https://app.perpl.xyz" target="_blank" rel="noopener noreferrer"
+          style={{ color: 'inherit', textDecoration: 'underline' }}>Deposit on Perpl</a> to start trading
+      </div>
+    );
+  }
+
   if (!positions.length) {
     // One line, not an empty box: nothing to shout about when flat.
     return (

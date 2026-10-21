@@ -593,7 +593,13 @@ export default function PositionsPanel({ initialTab }: { initialTab?: 'positions
             SL/TP on Perpl: {triggerOrders.length}
           </button>
         )}
-        {address && !account.venueSession && (
+        {address && account.noPerplAccount && (
+          <span className="text-[10px] px-1.5 py-0.5 text-text-secondary">
+            No Perpl account yet. <a href="https://app.perpl.xyz" target="_blank" rel="noopener noreferrer"
+              className="text-text-primary underline">Deposit on Perpl</a> to start trading
+          </span>
+        )}
+        {address && !account.venueSession && !account.noPerplAccount && (
           <span className="text-[10px] px-1.5 py-0.5 bg-danger/10 text-danger rounded font-medium"
                 title="Orders and SL/TP are read from the live Perpl connection. They are still on Perpl.">
             Reconnecting to Perpl, orders and SL/TP not loaded yet
