@@ -769,3 +769,9 @@
   .dsb .bfoot { margin-bottom: 8px; }
   .dsb .bfoot button { min-height: 44px; }
 }
+
+/* Discover list: sortable headers (2026-10-21) */
+.dsb .ltable th .thsort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; }
+.dsb .ltable th .thsort:hover { color: var(--text); }
+.dsb .ltable th .thsort[aria-pressed="true"] { color: var(--text); }
+.dsb .ltable th .thsort .arr { font-size: 9px; color: var(--accent); min-width: 8px; }

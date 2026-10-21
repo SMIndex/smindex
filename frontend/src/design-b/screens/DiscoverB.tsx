@@ -10,6 +10,11 @@ import { COPY_LIVE_ENABLED } from '@/config/constants';
 import { formatCompact, formatPercent, shortenAddress } from '@/lib/formatters';
 import MobileSheetB, { usePhone } from '../MobileSheetB';
 import AutoCopyButton from '@/components/copy/AutoCopyButton';
+import {
+  DEFAULT_VIEW, RETURN_OPTS, PROFIT_OPTS, VOLUME_OPTS, ACTIVE_OPTS, SORT_COLS, SMALL_PROFIT_USD,
+  applyView, clickSort, filtersActive, hasViewParams, parseView, sortRows, writeView,
+  type DiscoverView, type SortCol,
+} from '@/lib/discoverView';
 
 // Design B: Copy trade Discover (spec §3.1). Presentation only: the EXACT
 // existing data layer from pages/copy/Discover.tsx (same hooks, same query
@@ -46,6 +51,36 @@ function relAge(iso: string | null | undefined): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
+const VIEW_KEY = 'smindex.discover.view';
+const SORT_LABELS: Record<SortCol, string> = { profit: 'Profit', return: 'Return', volume: 'Volume', open: 'Open', active: 'active' };
+const ACTIVE_LABELS: Record<string, string> = { '': 'Any', '24h': '24 h', '7d': '7 days', '30d': '30 days' };
+const usdPlus = (n: number) => (n >= 1e6 ? `$${n / 1e6}M+` : `$${n / 1e3}K+`);
+
+function SortBtn({ col, label, view, onSort }: { col: SortCol; label: string; view: DiscoverView; onSort: (c: SortCol) => void }) {
+  const on = view.sort === col;
+  return (
+    <button className="thsort" aria-pressed={on} onClick={() => onSort(col)}
+      title={on ? (view.dir === 'desc' ? 'High to low, click for low to high' : 'Low to high, click for high to low') : 'Sort high to low'}>
+      {label}<span className="arr" aria-hidden>{on ? (view.dir === 'desc' ? '▼' : '▲') : ''}</span>
+    </button>
+  );
+}
+
+function FilterSeg<T extends string | number>({ label, opts, value, fmt, onPick }: {
+  label: string; opts: T[]; value: T; fmt: (v: T) => string; onPick: (v: T) => void;
+}) {
+  return (
+    <div className="fgroup">
+      <span className="flabel">{label}</span>
+      <div className="seg">
+        {opts.map((o) => (
+          <button key={String(o)} aria-pressed={value === o} onClick={() => onPick(o)}>{fmt(o)}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function medalClass(rank: number): string { return rank === 1 ? 'medal m1' : rank === 2 ? 'medal m2' : rank === 3 ? 'medal m3' : 'medal'; }
 
 function Badges({ t, exchange }: { t: TraderListItem; exchange: string }) {
@@ -69,8 +104,24 @@ export default function DiscoverB() {
   const sort = useCopyStore((s) => s.discoverSort);
   const setSort = useCopyStore((s) => s.setDiscoverSort);
   const [period, setPeriod] = useState('all');
-  const [openOnly, setOpenOnly] = useState(false);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Column sort + filters live in the URL (shareable) and the last choice is remembered per browser.
+  const dview = useMemo(() => parseView(searchParams), [searchParams]);
+  const setDview = (next: DiscoverView) => setSearchParams((p) => writeView(p, next), { replace: true });
+  useEffect(() => {
+    if (hasViewParams(searchParams)) return;
+    try {
+      const saved = localStorage.getItem(VIEW_KEY);
+      if (saved) setSearchParams((p) => writeView(p, parseView(new URLSearchParams(saved))), { replace: true });
+    } catch { /* storage blocked: defaults */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(VIEW_KEY, writeView(new URLSearchParams(), dview).toString()); } catch { /* ignore */ }
+  }, [dview]);
+  const onSort = (c: SortCol) => setDview(clickSort(dview, c));
+  const resetView = () => setDview(DEFAULT_VIEW);
+  const narrowed = filtersActive(dview);
   const walletFilter = useMemo(() => {
     const ws = (searchParams.get('wallets') || '').split(',')
       .map((w) => w.trim().toLowerCase())
@@ -133,12 +184,12 @@ export default function DiscoverB() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletKey, equityTf, exchange]);
 
-  const shown = useMemo(() => {
+  const { shown, smallHidden } = useMemo(() => {
     if (walletFilter) {
       const set = new Set(walletFilter);
-      return traders.filter((t) => set.has(t.wallet_address.toLowerCase()));
+      return { shown: sortRows(traders.filter((t) => set.has(t.wallet_address.toLowerCase())), dview), smallHidden: 0 };
     }
-    let rows = openOnly ? traders.filter((t) => t.has_active_positions || t.active_positions_pending) : traders;
+    let rows = traders;
     if (activeProfitable && exchange === 'hl') {
       rows = rows.filter((t) =>
         (t.activity?.active_days_7d ?? 0) >= 5
@@ -151,8 +202,9 @@ export default function DiscoverB() {
         t.wallet_address.toLowerCase().includes(q)
         || (t.display_name ?? '').toLowerCase().includes(q));
     }
-    return rows;
-  }, [openOnly, activeProfitable, exchange, traders, search, walletFilter]);
+    const r = applyView(rows, dview);
+    return { shown: r.rows, smallHidden: r.smallHidden };
+  }, [dview, activeProfitable, exchange, traders, search, walletFilter]);
 
   const sourceLabel = exchInfo?.label ?? (exchange === 'hl' ? 'Hyperliquid' : 'Perpl');
   const TABS = [
@@ -216,9 +268,11 @@ export default function DiscoverB() {
           )}
         </div>
         {/* Row 2: on phones: one "Sort & filter" button opening a bottom sheet (spec 4.3) */}
-        <MobileSheetB label="Sort & filter" title="Sort and filter traders"
-          summary={[SORTS.find((s) => s.key === sort)?.label, WINDOW_LABELS[period] ?? period, view === 'card' ? 'Cards' : null,
-            openOnly ? 'open trades' : null, activeProfitable ? 'active+profitable' : null].filter(Boolean).join(' · ')}>
+        <MobileSheetB label="Filters" title="Sort and filter traders"
+          summary={[`${SORT_LABELS[dview.sort]} ${dview.dir === 'desc' ? '▼' : '▲'}`, WINDOW_LABELS[period] ?? period, view === 'card' ? 'Cards' : null,
+            dview.minReturn ? `${dview.minReturn}%+` : null, dview.minProfit ? usdPlus(dview.minProfit) : null,
+            dview.minVolume ? `vol ${usdPlus(dview.minVolume)}` : null, dview.active ? ACTIVE_LABELS[dview.active] : null,
+            dview.open ? 'open positions' : null, activeProfitable ? 'active+profitable' : null].filter(Boolean).join(' · ')}>
         <div className="frow">
           {phone && (
             <div className="fgroup">
@@ -254,16 +308,50 @@ export default function DiscoverB() {
                   onClick={() => setActiveProfitable((v) => !v)}>Active and profitable</button>
               )}
               {exchInfo?.has_live_positions !== false && (
-                <button className="chipbtn" aria-pressed={openOnly} onClick={() => setOpenOnly((v) => !v)}>Has open trades</button>
+                <button className="chipbtn" aria-pressed={dview.open} onClick={() => setDview({ ...dview, open: !dview.open })}>Has open positions</button>
               )}
             </div>
           </div>
+        </div>
+        <div className="frow">
+          {phone && (
+            <div className="fgroup">
+              <span className="flabel">Order by</span>
+              <div className="seg">
+                {SORT_COLS.map((c) => (
+                  <button key={c} aria-pressed={dview.sort === c} onClick={() => onSort(c)}>
+                    {c === 'active' ? 'Last active' : SORT_LABELS[c]}{dview.sort === c ? (dview.dir === 'desc' ? ' ▼' : ' ▲') : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <FilterSeg label="Min return" opts={RETURN_OPTS} value={dview.minReturn}
+            fmt={(n) => (n ? `${n}%+` : 'All')} onPick={(n) => setDview({ ...dview, minReturn: n })} />
+          <FilterSeg label="Min profit" opts={PROFIT_OPTS} value={dview.minProfit}
+            fmt={(n) => (n ? usdPlus(n) : 'All')} onPick={(n) => setDview({ ...dview, minProfit: n })} />
+          <FilterSeg label="Min volume" opts={VOLUME_OPTS} value={dview.minVolume}
+            fmt={(n) => (n ? usdPlus(n) : 'All')} onPick={(n) => setDview({ ...dview, minVolume: n })} />
+          <FilterSeg label="Active within" opts={ACTIVE_OPTS} value={dview.active}
+            fmt={(a) => ACTIVE_LABELS[a]} onPick={(a) => setDview({ ...dview, active: a })} />
+          {dview.sort === 'return' && (
+            <button className="chipbtn" aria-pressed={dview.small}
+              title={`Return is sorted without traders under $${SMALL_PROFIT_USD} profit, where a tiny account can show a huge return`}
+              onClick={() => setDview({ ...dview, small: !dview.small })}>Include small accounts</button>
+          )}
+          <button className="btn sm" onClick={resetView}
+            disabled={!narrowed && dview.sort === DEFAULT_VIEW.sort && dview.dir === DEFAULT_VIEW.dir && !dview.small}>Reset</button>
         </div>
         </MobileSheetB>
       </div>
 
       {!loading && (
-        <p className="count">{shown.length} trader{shown.length === 1 ? '' : 's'} on {sourceLabel}, showing {view} view</p>
+        <p className="count">
+          {walletFilter
+            ? `${shown.length} trader${shown.length === 1 ? '' : 's'} on ${sourceLabel}, showing ${view} view`
+            : `${shown.length} of ${traders.length} traders on ${sourceLabel} match`}
+          {!walletFilter && smallHidden > 0 && `, ${smallHidden} small account${smallHidden === 1 ? '' : 's'} hidden (profit under $${SMALL_PROFIT_USD})`}
+        </p>
       )}
 
       {error && <div className="empty" style={{ borderColor: 'var(--short)', color: 'var(--short)' }}>Traders are unavailable right now ({error}). Try again shortly.</div>}
@@ -271,15 +359,26 @@ export default function DiscoverB() {
       {loading && traders.length === 0 ? (
         <div className="empty">Loading traders…</div>
       ) : shown.length === 0 && error ? null : shown.length === 0 ? (
-        <div className="empty">{openOnly ? 'No traders with open trades right now.' : 'No traders found.'}</div>
+        !walletFilter && (narrowed || smallHidden > 0 || search.trim() || activeProfitable) ? (
+          <div className="empty">
+            No traders match these filters
+            <div style={{ marginTop: 10 }}>
+              <button className="btn sm primary" onClick={() => { resetView(); setSearch(''); setActiveProfitable(false); }}>Reset</button>
+            </div>
+          </div>
+        ) : <div className="empty">No traders found.</div>
       ) : view === 'list' ? (
         <div className="ltable">
           <table>
             <thead>
               <tr>
-                <th style={{ width: 40 }}>#</th><th>Trader</th>
-                <th className="r">Profit</th><th className="r">Return</th><th className="r">Volume</th>
-                <th className="r">Open</th><th>Equity {period === 'day' ? '24h' : 'all'}</th><th />
+                <th style={{ width: 40 }}>#</th>
+                <th>Trader · <SortBtn col="active" label="active" view={dview} onSort={onSort} /></th>
+                <th className="r"><SortBtn col="profit" label="Profit" view={dview} onSort={onSort} /></th>
+                <th className="r"><SortBtn col="return" label="Return" view={dview} onSort={onSort} /></th>
+                <th className="r"><SortBtn col="volume" label="Volume" view={dview} onSort={onSort} /></th>
+                <th className="r"><SortBtn col="open" label="Open" view={dview} onSort={onSort} /></th>
+                <th>Equity {period === 'day' ? '24h' : 'all'}</th><th />
               </tr>
             </thead>
             <tbody>
