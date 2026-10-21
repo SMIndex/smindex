@@ -9,10 +9,15 @@ Two sources, the newest wins:
     for the wallets it follows (ws userFills, including the subscription
     snapshot; poll-tier position changes at detection time). Zero requests.
   * hourly: after each hourly leaderboard ingest, each listed wallet's newest
-    fill is read with userFillsByTime from the previous read (first read: 24 h)
+    fill is read with userFillsByTime from the previous read (first read: 2 h)
     for the wallet AND its sub-accounts (Hyperliquid's leaderboard counts both;
     the per-user endpoints do not). Background priority, paced, once an hour:
     no per-minute requests. Sub-account lists are cached for a day.
+    Measured 2026-10-21: the 147 listed wallets have 838 accounts (one has 80
+    sub-accounts), ~20 weight per read. Accounts with no fill in 7 days are
+    re-read once a day, not hourly. A wallet with no fill in 2 h gets one
+    newest-first read of its main account per day, so an older last trade
+    still shows (sub-accounts idle for over 2 h before the first read are not searched until they trade again).
 
 A wallet the tracker does not follow shows the hourly value (fallback); the
 tracker's 10 real-time slots are Hyperliquid's per-IP cap and adding wallets to
@@ -32,16 +37,20 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 LISTED_PER_WINDOW = 50              # Discover asks for 50 per window
-FIRST_LOOKBACK_MS = 24 * 3600 * 1000
+FIRST_LOOKBACK_MS = 2 * 3600 * 1000     # first read per account; older activity comes from the daily newest-first read
 OVERLAP_MS = 5 * 60 * 1000          # re-read a little before the last read
 FULL_PAGE = 2000                    # userFillsByTime page cap (oldest first)
 SUBS_TTL_SEC = 24 * 3600
-PAUSE_SEC = 0.5
+PAUSE_SEC = 6.0                     # ~200 weight/min at most during a pass
+ACTIVE_MS = 7 * 24 * 3600 * 1000    # an account with a fill this recent is read every pass
+IDLE_EVERY_SEC = 24 * 3600          # idle accounts and the newest-first fallback: once a day
 
 _hourly: dict[str, int] = {}        # wallet -> newest fill ms (wallet + sub-accounts)
 _acct_last: dict[str, int] = {}     # account -> newest fill ms seen
 _acct_read: dict[str, int] = {}     # account -> ms of its last successful read
 _subs: dict[str, tuple[float, list[str]]] = {}
+_acct_due: dict[str, float] = {}    # account -> monotonic time it is next read
+_newest_tried: dict[str, float] = {}  # wallet -> monotonic time of its newest-first read
 _task: asyncio.Task | None = None
 _last_run: dict = {}
 
@@ -109,6 +118,9 @@ async def _accounts(wallet: str, stats: dict) -> list[str]:
 
 
 async def _read_account(acct: str, now_ms: int, stats: dict) -> int | None:
+    if time.monotonic() < _acct_due.get(acct, 0):
+        stats["idle_skipped"] += 1
+        return _acct_last.get(acct)
     start = _acct_read.get(acct, now_ms - FIRST_LOOKBACK_MS) - OVERLAP_MS
     try:
         fills = await _post({"type": "userFillsByTime", "user": acct,
@@ -124,6 +136,8 @@ async def _read_account(acct: str, now_ms: int, stats: dict) -> int | None:
         _acct_read[acct] = now_ms
         if newest is not None and newest > _acct_last.get(acct, 0):
             _acct_last[acct] = newest
+        active = now_ms - _acct_last.get(acct, 0) <= ACTIVE_MS
+        _acct_due[acct] = 0 if active else time.monotonic() + IDLE_EVERY_SEC
     except Exception as exc:
         stats["errors"] += 1
         logger.debug("hl last trade: fills read failed for %s: %s", acct[:10], exc)
@@ -137,13 +151,30 @@ async def refresh(wallets: list[str] | None = None) -> dict:
     t0 = time.monotonic()
     wallets = wallets if wallets is not None else await listed_wallets()
     stats = {"wallets": len(wallets), "accounts": 0, "requests": 0, "full_pages": 0,
-             "errors": 0, "with_fill": 0}
+             "errors": 0, "with_fill": 0, "idle_skipped": 0, "newest_first": 0}
     w0 = hl_client.get_metrics()["per_class"]["background"]["weight"]
     for w in wallets:
         accts = await _accounts(w, stats)
         stats["accounts"] += len(accts)
         now_ms = int(time.time() * 1000)
         newest = [n for n in [await _read_account(a, now_ms, stats) for a in accts] if n]
+        if not newest and time.monotonic() - _newest_tried.get(w, -IDLE_EVERY_SEC) >= IDLE_EVERY_SEC:
+            # nothing found: the main account's newest fill, whenever it was
+            _newest_tried[w] = time.monotonic()
+            try:
+                fills = await _post({"type": "userFills", "user": w, "aggregateByTime": True})
+                stats["requests"] += 1
+                stats["newest_first"] += 1
+                n = max((int(f["time"]) for f in fills or [] if f.get("time")), default=None)
+                if n and n > _acct_last.get(w, 0):
+                    _acct_last[w] = n
+            except Exception as exc:
+                stats["errors"] += 1
+                logger.debug("hl last trade: newest fill read failed for %s: %s", w[:10], exc)
+            finally:
+                await asyncio.sleep(PAUSE_SEC)
+            if _acct_last.get(w):
+                newest = [_acct_last[w]]
         if newest:
             _hourly[w] = max(newest)
             stats["with_fill"] += 1
