@@ -12,7 +12,7 @@ import MobileSheetB, { usePhone } from '../MobileSheetB';
 import AutoCopyButton from '@/components/copy/AutoCopyButton';
 import {
   DEFAULT_VIEW, RETURN_OPTS, PROFIT_OPTS, VOLUME_OPTS, ACTIVE_OPTS, SORT_COLS, SMALL_PROFIT_USD,
-  applyView, clickSort, filtersActive, hasViewParams, parseView, sortRows, writeView,
+  applyView, clickSort, filtersActive, hasViewParams, lastActiveIso, parseView, sortRows, writeView,
   type DiscoverView, type SortCol,
 } from '@/lib/discoverView';
 
@@ -394,7 +394,7 @@ export default function DiscoverB() {
                         {t.display_name || shortenAddress(t.wallet_address)}
                         <Badges t={t} exchange={exchange} />
                       </div>
-                      <div className="meta">{shortenAddress(t.wallet_address)} · active {relAge(t.activity?.last_active_at || t.last_fill_at)}</div>
+                      <div className="meta">{shortenAddress(t.wallet_address)} · active {relAge(lastActiveIso(t))}</div>
                     </td>
                     <td className="r"><span className={`pv ${t.pnl_total >= 0 ? 'long-c' : 'short-c'}`}>{formatCompact(t.pnl_total)}</span></td>
                     <td className="r"><span className={`roi ${t.roi >= 0 ? 'long-c' : 'short-c'}`}>{formatPercent(t.roi)}</span></td>
@@ -432,7 +432,7 @@ export default function DiscoverB() {
                   <span className={medalClass(t.rank)}>{t.rank}</span>
                   <div>
                     <div className="name">{t.display_name || shortenAddress(t.wallet_address)}</div>
-                    <div className="meta">Active {relAge(t.activity?.last_active_at || t.last_fill_at)}</div>
+                    <div className="meta">Active {relAge(lastActiveIso(t))}</div>
                   </div>
                 </div>
                 <Badges t={t} exchange={exchange} />

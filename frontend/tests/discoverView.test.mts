@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DEFAULT_VIEW, applyView, clickSort, parseView, writeView, SMALL_PROFIT_USD } from '../src/lib/discoverView.ts';
+import { DEFAULT_VIEW, applyView, clickSort, lastActiveIso, parseView, writeView, SMALL_PROFIT_USD } from '../src/lib/discoverView.ts';
 
 const rows = JSON.parse(readFileSync(process.env.TRADERS_JSON!, 'utf8'));
 const v = (o: object) => ({ ...DEFAULT_VIEW, ...o });
@@ -52,4 +52,13 @@ test('URL round trip keeps other params and drops bad values', () => {
   assert.deepEqual(parseView(p), v({ sort: 'return', minReturn: 50, open: true }));
   assert.deepEqual(parseView(new URLSearchParams('sort=bogus&minReturn=33&active=9d')), DEFAULT_VIEW);
   assert.equal(writeView(new URLSearchParams(), DEFAULT_VIEW).toString(), '');
+});
+
+test('last active: newer fill wins, day-precise snapshot gives way to a fill that day', () => {
+  const r = (la: string | null, lf: string | null) => lastActiveIso({ rank: 1, pnl_total: 0, roi: 0, volume: 0, activity: { last_active_at: la }, last_fill_at: lf });
+  assert.equal(r('2026-10-21T00:34:11', '2026-10-21T08:44:41'), '2026-10-21T08:44:41');
+  assert.equal(r('2026-09-30T23:59:59', '2026-09-30T03:55:58'), '2026-09-30T03:55:58');
+  assert.equal(r('2026-10-21T04:07:06', '2026-10-13T02:27:44'), '2026-10-21T04:07:06');
+  assert.equal(r(null, '2026-09-01T03:09:00'), '2026-09-01T03:09:00');
+  assert.equal(r('2026-10-20T15:53:55', null), '2026-10-20T15:53:55');
 });

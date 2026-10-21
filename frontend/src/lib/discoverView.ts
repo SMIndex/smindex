@@ -86,9 +86,21 @@ export function filtersActive(v: DiscoverView): boolean {
   return !!(v.minReturn || v.minProfit || v.minVolume || v.active || v.open);
 }
 
-// Same timestamp the row shows as "active ... ago".
+// The newest activity we know. last_active_at is when a leaderboard snapshot saw
+// volume grow (activity older than 48 h is kept per day, as 23:59:59 of that day);
+// last_fill_at is a detected fill time. The fill wins when it is newer, or when it
+// falls on the day a day-precise snapshot time stands for. The row shows this too.
+export function lastActiveIso(t: ViewRow): string | null {
+  const la = t.activity?.last_active_at || null;
+  const lf = t.last_fill_at || null;
+  if (!la || !lf) return la || lf;
+  if (lf > la) return lf;
+  if (la.endsWith('T23:59:59') && la.slice(0, 10) === lf.slice(0, 10)) return lf;
+  return la;
+}
+
 export function lastActiveMs(t: ViewRow): number | null {
-  const iso = t.activity?.last_active_at || t.last_fill_at;
+  const iso = lastActiveIso(t);
   if (!iso) return null;
   const ms = Date.parse(iso.endsWith('Z') ? iso : iso + 'Z');
   return Number.isFinite(ms) ? ms : null;

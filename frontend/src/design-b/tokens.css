@@ -771,6 +771,10 @@
 }
 
 /* Discover list: sortable headers (2026-10-21) */
+/* The table is the containing block for absolutely placed children (the auto-copy
+   button's screen-reader label), so they stay inside its sideways scroll on phones
+   instead of widening the page to ~1075 px on the Hyperliquid list. */
+.dsb .ltable { position: relative; }
 .dsb .ltable th .thsort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; }
 .dsb .ltable th .thsort:hover { color: var(--text); }
 .dsb .ltable th .thsort[aria-pressed="true"] { color: var(--text); }
