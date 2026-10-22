@@ -1,6 +1,6 @@
 import { oneAtATime } from '@/lib/oneAtATime';
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSignMessage } from 'wagmi';
 
 import { useAuth } from '@/hooks/useAuth';
@@ -217,6 +217,37 @@ export default function PortfolioB() {
     queryFn: () => pageAll((page) => getPerplPositionHistory(address!, page), 2000),
     enabled: !!address && keyPresent, staleTime: 60_000, retry: false,
   });
+  // A fill or an account event on the trading socket re-reads the venue's
+  // history (2026-10-22), shortly after so Perpl's own record has caught up;
+  // one re-read per burst of frames.
+  const qc = useQueryClient();
+  useEffect(() => {
+    if (!address) return;
+    let fillsT: number | undefined;
+    let acctT: number | undefined;
+    const onVenue = (e: Event) => {
+      const d: any = (e as CustomEvent)?.detail?.detail;
+      if (Array.isArray(d?.fills) || Array.isArray(d?.positions)) {
+        window.clearTimeout(fillsT);
+        fillsT = window.setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ['perpl-fills', address] });
+          qc.invalidateQueries({ queryKey: ['perpl-position-history', address] });
+        }, 1500);
+      }
+      if (d?.account || Array.isArray(d?.fills)) {
+        window.clearTimeout(acctT);
+        acctT = window.setTimeout(() => qc.invalidateQueries({ queryKey: ['perpl-account-history', address] }), 1500);
+      }
+    };
+    window.addEventListener('venue_account_event', onVenue);
+    window.addEventListener('trigger_leg_filled', onVenue);
+    return () => {
+      window.removeEventListener('venue_account_event', onVenue);
+      window.removeEventListener('trigger_leg_filled', onVenue);
+      window.clearTimeout(fillsT);
+      window.clearTimeout(acctT);
+    };
+  }, [address, qc]);
   const ourOrdersQ = useQuery({
     queryKey: ['order-history-portfolio'], queryFn: () => getOrderHistory({ limit: 200 }),
     enabled: !!address, staleTime: 60_000,
