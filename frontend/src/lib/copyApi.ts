@@ -526,19 +526,22 @@ export interface HlActiveSummary {
   pending: boolean;
 }
 
-// Session cache: once a wallet's summary resolves (pending:false with a real
-// count) it's served locally for the rest of the session, revisiting the tab
-// makes zero new requests for those wallets. Failures (count:null) are NOT
-// cached so a later visit can recover. Backend accepts max 25 wallets/request.
-const hlActiveSession = new Map<string, HlActiveSummary>();
+// Short cache (2026-10-22): a resolved summary (pending:false with a real
+// count) is served locally for HL_ACTIVE_TTL_MS, then asked again so the OPEN
+// column refreshes every 5 minutes instead of once per browser session. While
+// the server is still priming a wallet (pending), the last known summary keeps
+// showing. Failures (count:null) are NOT cached. Backend accepts max 25 wallets/request.
+const HL_ACTIVE_TTL_MS = 5 * 60 * 1000;
+const hlActiveSession = new Map<string, { s: HlActiveSummary; at: number }>();
 
 export async function getHlActiveBatch(wallets: string[]): Promise<Record<string, HlActiveSummary>> {
   const out: Record<string, HlActiveSummary> = {};
   const toFetch: string[] = [];
+  const now = Date.now();
   for (const w of wallets) {
     const k = w.toLowerCase();
     const cached = hlActiveSession.get(k);
-    if (cached) out[k] = cached;
+    if (cached && now - cached.at < HL_ACTIVE_TTL_MS) out[k] = cached.s;
     else toFetch.push(k);
   }
   for (let i = 0; i < toFetch.length; i += 25) {
@@ -547,8 +550,13 @@ export async function getHlActiveBatch(wallets: string[]): Promise<Record<string
       .get<Record<string, HlActiveSummary>>('/api/traders/hl-active', { params: { wallets: chunk.join(',') } })
       .then((r) => r.data);
     for (const [k, s] of Object.entries(data)) {
-      out[k] = s;
-      if (!s.pending && s.count !== null) hlActiveSession.set(k, s);
+      const old = hlActiveSession.get(k);
+      if (!s.pending && s.count !== null) {
+        hlActiveSession.set(k, { s, at: Date.now() });
+        out[k] = s;
+      } else {
+        out[k] = old ? old.s : s;
+      }
     }
   }
   return out;
