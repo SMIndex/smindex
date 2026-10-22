@@ -206,8 +206,13 @@ class WSManager:
 
             await asyncio.sleep(self.POLL_INTERVAL)
 
+    # Equity snapshots cover every trader Discover can list (2026-10-22): the top
+    # SNAPSHOT_LISTED_N by profit, volume and return in both Perpl windows, not
+    # only the all-time top 20, so every listed trader's equity chart grows.
+    SNAPSHOT_LISTED_N = 50
+
     async def _leaderboard_snapshot_loop(self):
-        """Save top 20 leaderboard to DB every 30 minutes."""
+        """Save the all-time row of every listed Perpl trader to DB every 30 minutes."""
         await asyncio.sleep(60)  # wait for startup
         while self._running:
             try:
@@ -216,10 +221,18 @@ class WSManager:
                 from datetime import datetime
 
                 traders = await perpl_client.get_leaderboard_parsed("all", "pnl")
+                day = await perpl_client.get_leaderboard_parsed("day", "pnl")
+                n = self.SNAPSHOT_LISTED_N
+                listed: set[str] = set()
+                for board in (traders, day):
+                    for key in ("pnl_total", "volume", "roi"):
+                        top = sorted(board, key=lambda t: t[key] or 0, reverse=True)[:n]
+                        listed |= {t["wallet_address"].lower() for t in top}
+                rows = [t for t in traders if t["wallet_address"].lower() in listed]
                 sf = get_session_factory()
                 async with sf() as session:
                     now = datetime.utcnow()
-                    for t in traders[:20]:
+                    for t in rows:
                         session.add(LeaderboardSnapshot(
                             wallet_address=t["wallet_address"],
                             rank=t["rank"],
@@ -230,7 +243,7 @@ class WSManager:
                             timestamp=now,
                         ))
                     await session.commit()
-                logger.info("Leaderboard snapshot saved: %d traders", min(len(traders), 20))
+                logger.info("Leaderboard snapshot saved: %d traders", len(rows))
             except asyncio.CancelledError:
                 break
             except Exception:
