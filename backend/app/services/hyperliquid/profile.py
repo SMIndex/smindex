@@ -710,8 +710,10 @@ async def get_profile_state(wallet: str, deep: bool = True,
 # (open_positions.state_row); when its read is newer it is used with no venue
 # call, otherwise one clearinghouseState read (2 weight). Open orders (TP/SL
 # grouping) are read again when the positions changed and the orders are over
-# POS_FRESH_SEC old, otherwise kept up to _CACHE_TTL as before.
+# ORDERS_FRESH_SEC old, otherwise kept up to _CACHE_TTL as before (measured
+# 10-22: at 15 s three open market-maker pages cost ~140 weight/min).
 POS_FRESH_SEC = 15.0
+ORDERS_FRESH_SEC = 60.0
 _orders_raw: dict[str, tuple[float, list]] = {}
 
 
@@ -752,7 +754,7 @@ async def get_profile_state_live(wallet: str) -> dict:
                       "long" if _f(ap.get("position", {}).get("szi")) > 0 else "short",
                       round(abs(_f(ap.get("position", {}).get("szi"))), 8))
                      for ap in state.get("assetPositions", []) if _f(ap.get("position", {}).get("szi")) != 0)
-    if new_sig != _pos_sig(c[1].get("positions", [])) and now - orders_at >= POS_FRESH_SEC:
+    if new_sig != _pos_sig(c[1].get("positions", [])) and now - orders_at >= ORDERS_FRESH_SEC:
         r = await hl_client.post_info({"type": "frontendOpenOrders", "user": wallet},
                                       priority=hl_client.CRITICAL, timeout=15.0)
         r.raise_for_status()
