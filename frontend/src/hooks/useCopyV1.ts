@@ -183,10 +183,13 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
   // last refresh is older than that. Background merge: no flicker, rows keep
   // their order and the page keeps its scroll, sort and filters.
   const lastLoadAt = useRef(0);
-  useEffect(() => { if (!fetching) lastLoadAt.current = Date.now(); }, [fetching]);
+  useEffect(() => { if (fetching) lastLoadAt.current = Date.now(); }, [fetching]);
   useEffect(() => {
+    // The guard only stops a double load right after a return to the tab; it is
+    // half the period so it never swallows a regular tick (measured 10-22: a
+    // full-period guard raced the timer and refreshed every 115 s).
     const tick = () => {
-      if (document.hidden || Date.now() - lastLoadAt.current < LIST_REFRESH_MS - 1000) return;
+      if (document.hidden || Date.now() - lastLoadAt.current < LIST_REFRESH_MS / 2) return;
       load();
     };
     const id = setInterval(tick, LIST_REFRESH_MS);
