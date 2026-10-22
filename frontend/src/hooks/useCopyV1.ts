@@ -178,8 +178,27 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
     return () => clearInterval(id);
   }, [anyPending, load]);
 
+  // Regular refresh (2026-10-22): every 60 s while the tab is visible, the same
+  // as the server's 60 s list cache, plus once on return to the tab when the
+  // last refresh is older than that. Background merge: no flicker, rows keep
+  // their order and the page keeps its scroll, sort and filters.
+  const lastLoadAt = useRef(0);
+  useEffect(() => { if (!fetching) lastLoadAt.current = Date.now(); }, [fetching]);
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden || Date.now() - lastLoadAt.current < LIST_REFRESH_MS - 1000) return;
+      load();
+    };
+    const id = setInterval(tick, LIST_REFRESH_MS);
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [load]);
+
   return { traders, loading, fetching, error, refresh: load };
 }
+
+const LIST_REFRESH_MS = 60_000;
 
 function keepHlPositions(prev: TraderListItem[], next: TraderListItem[]): TraderListItem[] {
   if (!prev.length) return next;
