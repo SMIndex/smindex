@@ -1062,7 +1062,9 @@ function PerplSection({ addr, q }: { addr: string; q: ReturnType<typeof useQuery
         )}
         {hist?.indexer && (
           <span className="xp-tag soft" title={hist.provenance}>
-            {hist.indexed_from
+            {hist.indexed_through && hist.indexer.backfill_pct != null && hist.indexer.backfill_pct < 100
+              ? `History indexed up to ${hist.indexed_through} · ${hist.indexer.backfill_pct}% backfilled`
+              : hist.indexed_from
               ? `history indexed from ${new Date(hist.indexed_from + 'Z').toLocaleDateString()}${hist.indexer.backfill_pct != null ? ` · ${hist.indexer.backfill_pct}% backfilled` : ''}`
               : hist.indexer.backfill_pct != null
                 ? `no indexed events yet · chain ${hist.indexer.backfill_pct}% backfilled`

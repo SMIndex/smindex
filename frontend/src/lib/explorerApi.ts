@@ -183,6 +183,7 @@ export interface PerplHistEvent {
 export interface ExplorerPerplHistory {
   address: string; events: PerplHistEvent[]; count: number;
   indexed_from: string | null;
+  indexed_through?: string | null;
   indexer: { last_block: number; head_block: number | null; first_event_block: number | null; backfill_pct: number | null; note: string | null; updated_at: string | null } | null;
   status_line: string | null;
   equity: { t: string; v: number }[];

@@ -769,6 +769,23 @@ async def _indexer_state() -> dict | None:
             "updated_at": row[4].isoformat() if row[4] else None}
 
 
+_indexed_through: tuple[float, str | None] = (0.0, None)
+
+
+async def _indexed_through_date() -> str | None:
+    """Date (UTC, YYYY-MM-DD) of the newest indexed event, cached 5 min. The
+    indexer can be far behind the chain (209 days on 2026-10-22): every
+    history view says how far the index reaches."""
+    global _indexed_through
+    if time.time() - _indexed_through[0] < 300:
+        return _indexed_through[1]
+    sf = get_session_factory()
+    async with sf() as s:
+        m = (await s.execute(text("SELECT MAX(at) FROM perpl_events"))).scalar()
+    _indexed_through = (time.time(), m.date().isoformat() if m else None)
+    return _indexed_through[1]
+
+
 async def _perpl_events_for(address: str, limit: int = 300) -> tuple[list[dict], str | None]:
     """Events for an address: rows attributed to its account(s) plus rows this
     address SENT (tx_from) that carry no account attribution. Returns
@@ -813,18 +830,19 @@ async def explorer_perpl_history(address: str, limit: int = Query(300, ge=1, le=
     events, indexed_from = await _perpl_events_for(address, limit)
     equity = [{"t": e["at"], "v": e["balance_after"]}
               for e in reversed(events) if e["balance_after"] is not None]
+    through = await _indexed_through_date()
     status_line = None
     if state is None or (state.get("note") or "").startswith("awaiting"):
         status_line = ("Indexer awaiting its Envio API token (owner PENDING), "
                        "history fills in once indexing starts")
     elif state.get("backfill_pct") is not None and state["backfill_pct"] < 100:
-        status_line = (f"indexed from {indexed_from or 'genesis'} · backfill "
-                       f"{state['backfill_pct']}% complete")
+        status_line = (f"History indexed up to {through or 'unknown'} · backfill "
+                       f"{state['backfill_pct']}% complete, newer events are not shown yet")
     elif indexed_from:
         status_line = f"indexed from {indexed_from} · backfill complete"
     return {
         "address": address, "events": events, "count": len(events),
-        "indexed_from": indexed_from, "indexer": state,
+        "indexed_from": indexed_from, "indexed_through": through, "indexer": state,
         "status_line": status_line,
         "equity": equity,
         "equity_label": "on-chain account balance after each event, excludes "
