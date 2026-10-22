@@ -697,7 +697,8 @@ async def explorer_perpl(address: str) -> dict:
         out.update({"perpl_account": False, "account_id": 0,
                     "leaderboard": await _perpl_leaderboard(address),
                     "fetched_at": time.time()})
-        _perpl_cache[address] = (now, out)
+        # a no-account answer lives _PERPL_NOACCT_TTL, not PERPL_TTL (stamped as older)
+        _perpl_cache[address] = (now - max(0.0, PERPL_TTL - _PERPL_NOACCT_TTL), out)
         return out
 
     detail = await _chain_call(chain_reader.get_trader_detail, address)
