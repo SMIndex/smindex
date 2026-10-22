@@ -197,7 +197,7 @@ async def test_metrics_shape():
     await hl.post_info({"type": "userRole", "user": "0x1"}, priority=hl.EXPLORER)
     m = hl.get_metrics()
     assert m["soft_ceiling"] == 1000 and m["hard_ceiling"] == 1200
-    assert m["explorer_ceiling"] == 1000 and m["background_ceiling"] == 850   # 9754758 contract
+    assert m["explorer_ceiling"] == 1000 and m["background_ceiling"] == 840   # 30 % kept free (ca64e6e)
     assert abs(m["window_weight_used"] - 60) < 0.01
     assert m["per_class"][hl.EXPLORER]["requests"] == 1
     assert m["per_class"][hl.EXPLORER]["weight"] == 60

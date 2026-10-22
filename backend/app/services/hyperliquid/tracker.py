@@ -8,7 +8,10 @@ subscriptions): wallets ranked by watcher count; top <=10 get `userFills`
 subscriptions on ONE shared ws connection. The first message per subscription
 carries isSnapshot=true: that is HISTORY: we record fill ids (tid) as the
 baseline and never emit events from it. On reconnect we resubscribe and the
-fresh snapshot is diffed against seen tids so nothing double-fires.
+fresh snapshot is diffed against seen tids so nothing double-fires; fills newer
+than the drop are emitted, plus one userFillsByTime read per wallet for the gap
+(source 'hl_ws_gap': recorded and alerted, never auto-copied). Keepalive is
+Hyperliquid's own {"method":"ping"} every 30 s; 90 s of silence reconnects.
 
 POLLING TIER: tracked wallets beyond the ws budget are diffed via
 `clearinghouseState` every 15s with the same discipline as the Perpl
@@ -41,6 +44,13 @@ logger = get_logger(__name__)
 WS_URL = "wss://api.hyperliquid.xyz/ws"
 WS_TIER_MAX = 10          # HL hard cap: unique users per IP (user subscriptions)
 POLL_INTERVAL = 15.0
+# Hyperliquid's own keepalive: send {"method":"ping"}, it answers channel "pong".
+# The websockets library ping (20 s / 10 s timeout) dropped the tier 129 times
+# in 24 h on 2026-10-21 ("keepalive ping timeout", mostly during event loop
+# stalls), so the library ping is off and HL_SILENT_SEC of silence reconnects.
+HL_PING_SEC = 30.0
+HL_SILENT_SEC = 90.0       # no frame at all (fills or pong) for this long: reconnect
+GAP_MARGIN_MS = 5_000      # gap read starts this long before the drop
 TRACKED_REFRESH = 60.0
 SEEN_TIDS_MAX = 2000      # per wallet, ring-capped
 
@@ -61,7 +71,11 @@ stats = {
     "ws_fills_seen": 0, "ws_snapshot_fills_skipped": 0, "events_recorded": 0,
     "events_duplicate": 0, "alerts_enqueued": 0, "poll_requests": 0,
     "poll_events": 0, "reconnects": 0, "mm_rows_skipped": 0,
+    "drops_keepalive": 0, "drops_silent": 0, "drops_other": 0,
+    "gap_recoveries": 0, "gap_reads": 0, "gap_read_errors": 0, "gap_fills_recovered": 0,
 }
+_drop_ms: int | None = None        # when the last live ws connection dropped (gap start)
+_live_tier: set[str] = set()       # wallets on the last live connection (only they have a gap)
 # Market-maker wallets on the tracked set (same definition as analytics
 # cohort clause A: maker_ratio >= 0.6 AND trades_7d >= 500, trader_fill_stats).
 # Their increase/reduce rows are not persisted: one maker wallet wrote 186,231
@@ -416,8 +430,12 @@ def _strategy_assets() -> set[str]:
     return set(settings.strategy_assets_list)
 
 
-async def _handle_fills(wallet: str, fills: list[dict], is_snapshot: bool) -> None:
+async def _handle_fills(wallet: str, fills: list[dict], is_snapshot: bool,
+                        source: str = "hl_ws", gap_since_ms: int | None = None) -> list[dict]:
+    """Returns the snapshot fills newer than gap_since_ms that were held back
+    (not marked seen) so the reconnect gap recovery can emit them."""
     seen = _seen_tids.setdefault(wallet, set())
+    held: list[dict] = []
     for f in fills:
         try:
             _note_fill_time(wallet, int(f.get("time") or 0))
@@ -430,6 +448,10 @@ async def _handle_fills(wallet: str, fills: list[dict], is_snapshot: bool) -> No
             except Exception:
                 logger.exception("liquidation ingest failed for %s %s", wallet[:10], f.get("coin"))
         if is_snapshot or not _snapshot_done.get(wallet, False):
+            if (is_snapshot and gap_since_ms is not None and tid not in seen
+                    and int(f.get("time") or 0) >= gap_since_ms):
+                held.append(f)        # traded while the ws was down: emitted by the gap recovery
+                continue
             seen.add(tid)
             stats["ws_snapshot_fills_skipped"] += 1
             continue
@@ -478,25 +500,61 @@ async def _handle_fills(wallet: str, fills: list[dict], is_snapshot: bool) -> No
                 note = action
         try:
             await _emit_event(wallet, str(f.get("coin", "")), event_type, side,
-                              px, sz, "hl_ws", {"fill": f},
+                              px, sz, source, {"fill": f},
                               closed_pnl=closed_pnl, size_label="Fill size",
                               note=note, action=action, post_pos=post_pos)
         except Exception:
             # isolate: one bad row (e.g. schema mismatch) must not tear down
             # the shared ws connection for every tracked wallet
             logger.exception("hl event emit failed for %s %s", wallet[:10], f.get("coin"))
+    return held
+
+
+async def _gap_recover(wallet: str, since_ms: int, held: list[dict]) -> None:
+    """One newest-fill REST read for the time the ws was down, plus the fills the
+    resubscribe snapshot already carried for that window. Emitted with source
+    'hl_ws_gap': recorded and alerted, never auto-copied (the engine only acts
+    on 'hl_ws'), deduped by fill id and the DB event key."""
+    fills = list(held)
+    try:
+        resp = await hl_client.post_info(
+            {"type": "userFillsByTime", "user": wallet, "startTime": since_ms, "aggregateByTime": False},
+            priority=hl_client.CRITICAL, timeout=12.0)
+        stats["gap_reads"] += 1
+        if resp.status_code == 200:
+            body = await hl_client.decode_json(resp)
+            if isinstance(body, list):
+                fills.extend(body)
+        else:
+            stats["gap_read_errors"] += 1
+    except Exception as exc:
+        stats["gap_read_errors"] += 1
+        logger.warning("HL tracker gap read failed for %s: %s", wallet[:10], exc)
+    seen = _seen_tids.setdefault(wallet, set())
+    fresh = []
+    for f in sorted(fills, key=lambda x: int(x.get("time") or 0)):
+        tid = f.get("tid") or f.get("hash") or f"{f.get('oid')}:{f.get('time')}"
+        if tid not in seen and all((g.get("tid") or g.get("hash")) != tid for g in fresh):
+            fresh.append(f)
+    if fresh:
+        stats["gap_fills_recovered"] += len(fresh)
+        await _handle_fills(wallet, fresh, False, source="hl_ws_gap")
+        logger.info("HL tracker gap recovery: %s %d fill(s) recovered (gap %.0fs)",
+                    wallet[:10], len(fresh), (time.time() * 1000 - since_ms) / 1000)
 
 
 async def _ws_loop() -> None:
-    global _ws_conn
+    global _ws_conn, _drop_ms, _live_tier
     backoff = 1.0
     while True:
         wallets = list(_ws_wallets)
         if not wallets:
             await asyncio.sleep(5)
             continue
+        gap_since = (_drop_ms - GAP_MARGIN_MS) if _drop_ms else None
+        live = False
         try:
-            async with websockets.connect(WS_URL, ping_interval=20, ping_timeout=10,
+            async with websockets.connect(WS_URL, ping_interval=None,
                                           close_timeout=5) as ws:
                 _ws_conn = ws
                 for w in wallets:
@@ -507,10 +565,32 @@ async def _ws_loop() -> None:
                     }))
                 logger.info("HL tracker ws connected (%d user subscriptions)", len(wallets))
                 backoff = 1.0
-                async for raw in ws:
+                live = True
+                prev_tier, _live_tier = _live_tier, set(wallets)
+                if gap_since is None:
+                    prev_tier = set()
+                last_rx = time.monotonic()
+                last_ping = time.monotonic()
+                while True:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        raw = None
+                    now = time.monotonic()
+                    if raw is not None:
+                        last_rx = now
+                    if now - last_ping >= HL_PING_SEC:
+                        await ws.send('{"method":"ping"}')
+                        last_ping = now
+                    if now - last_rx > HL_SILENT_SEC:
+                        stats["drops_silent"] += 1
+                        raise ConnectionError(f"no frame for {HL_SILENT_SEC:.0f}s")
                     if list(_ws_wallets) != wallets:
                         logger.info("HL tracker ws tier changed, reconnecting")
+                        _drop_ms = int(time.time() * 1000)   # wallets staying on the tier get a gap read
                         break
+                    if raw is None:
+                        continue
                     try:
                         msg = json.loads(raw)
                     except Exception:
@@ -521,16 +601,30 @@ async def _ws_loop() -> None:
                         user = str(data.get("user", "")).lower()
                         fills = data.get("fills") or []
                         snap = bool(data.get("isSnapshot"))
-                        await _handle_fills(user, fills, snap)
+                        gs = gap_since if (snap and user in prev_tier) else None
+                        held = await _handle_fills(user, fills, snap, gap_since_ms=gs)
                         if snap:
                             _snapshot_done[user] = True
                             logger.info("HL tracker baseline seeded for %s (%d snapshot fills)",
                                         user[:10], len(fills))
+                            if gs is not None:
+                                stats["gap_recoveries"] += 1
+                                # in the background: the REST read must not stall this reader
+                                asyncio.get_event_loop().create_task(_gap_recover(user, gap_since, held))
         except asyncio.CancelledError:
             _ws_conn = None
             raise
         except Exception as exc:
             stats["reconnects"] += 1
+            text_ = str(exc)
+            if "no frame for" in text_:
+                pass
+            elif "keepalive" in text_:
+                stats["drops_keepalive"] += 1
+            else:
+                stats["drops_other"] += 1
+            if live:
+                _drop_ms = int(time.time() * 1000)
             logger.warning("HL tracker ws dropped (%s), reconnect in %.0fs", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
