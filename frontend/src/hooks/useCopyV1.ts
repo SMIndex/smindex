@@ -128,20 +128,12 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
         return replace ? rows : mergeTraders(prev, rows);
       });
       if (data.length) writeDiscoverSnap(discoverSnapKey({ exchange, sort, period, limit, wallets }), data);
+      // HL open positions (2026-10-22): from the same light endpoint as last
+      // active (the trades feed service re-reads a wallet within seconds of a
+      // trade that changes its positions), no per-page Hyperliquid read.
       if (exchange === 'hl' && data.length) {
-        copyApi.getHlActiveBatch(data.map((t) => t.wallet_address)).then((batch) => {
-          setTraders((prev) => prev.map((t) => {
-            const s = batch[t.wallet_address.toLowerCase()];
-            if (!s) return t;
-            return {
-              ...t,
-              active_positions_count: s.count,
-              active_markets: s.markets ?? [],
-              has_active_positions: (s.count ?? 0) > 0,
-              active_positions_pending: s.pending,
-              active_positions_error: s.count === null && !s.pending ? true : t.active_positions_error,
-            };
-          }));
+        copyApi.getHlLastActive(data.map((t) => t.wallet_address)).then((m) => {
+          setTraders((prev) => patchHlLive(prev, m));
         }).catch(() => {});
       }
     } catch (e) {
@@ -198,7 +190,7 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [load]);
 
-  // HL "last active" every 15 s while visible: only that column is patched.
+  // HL "last active" and "Open" every 15 s while visible: only those columns are patched.
   const walletsRef = useRef<string[]>([]);
   walletsRef.current = traders.map((t) => t.wallet_address);
   useEffect(() => {
@@ -207,16 +199,7 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
       if (document.hidden || !walletsRef.current.length) return;
       try {
         const m = await copyApi.getHlLastActive(walletsRef.current);
-        setTraders((prev) => {
-          let changed = false;
-          const next = prev.map((t) => {
-            const v = m[t.wallet_address.toLowerCase()];
-            if (!v || !v.last_trade_at || v.last_trade_at === t.last_trade_at) return t;
-            changed = true;
-            return { ...t, last_trade_at: v.last_trade_at, last_trade_src: v.src ?? undefined };
-          });
-          return changed ? next : prev;
-        });
+        setTraders((prev) => patchHlLive(prev, m));
       } catch { /* keep the values on screen */ }
     };
     const id = setInterval(tick, LAST_ACTIVE_REFRESH_MS);
@@ -228,6 +211,43 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
 
 const LIST_REFRESH_MS = 60_000;
 const LAST_ACTIVE_REFRESH_MS = 15_000;
+const HL_STATE_REFRESH_MS = 15_000;
+
+// Patch the HL live columns (last active, open positions) in place; rows whose
+// values did not change keep their identity (no re-render, no flicker). While
+// the server has not read a wallet yet (pending) the last known values stay.
+function patchHlLive(prev: TraderListItem[], m: Awaited<ReturnType<typeof copyApi.getHlLastActive>>): TraderListItem[] {
+  let changed = false;
+  const next = prev.map((t) => {
+    const v = m[t.wallet_address.toLowerCase()];
+    if (!v) return t;
+    let u: TraderListItem = t;
+    if (v.last_trade_at && v.last_trade_at !== t.last_trade_at) {
+      u = { ...u, last_trade_at: v.last_trade_at, last_trade_src: v.src ?? undefined };
+    }
+    const o = v.open;
+    if (o && !o.pending) {
+      const markets = o.markets ?? [];
+      const same = t.active_positions_count === o.count && !t.active_positions_pending
+        && JSON.stringify(t.active_markets ?? []) === JSON.stringify(markets);
+      if (!same) {
+        u = {
+          ...u,
+          active_positions_count: o.count,
+          active_markets: markets,
+          has_active_positions: (o.count ?? 0) > 0,
+          active_positions_pending: false,
+          active_positions_error: o.count === null ? true : undefined,
+        };
+      }
+    } else if (o && o.pending && t.active_positions_count == null && !t.active_positions_pending) {
+      u = { ...u, active_positions_pending: true };
+    }
+    if (u !== t) changed = true;
+    return u;
+  });
+  return changed ? next : prev;
+}
 
 function keepHlPositions(prev: TraderListItem[], next: TraderListItem[]): TraderListItem[] {
   if (!prev.length) return next;

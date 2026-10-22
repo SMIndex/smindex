@@ -322,16 +322,21 @@ async def equity_batch(
 
 @router.get("/hl-last-active")
 async def hl_last_active(wallets: str = Query(..., description="comma-separated, max 100")) -> dict:
-    """Light refresh for the Discover "last active" column: {wallet: {last_trade_at,
-    src}} from memory (trades feed table reloaded every 5 s, tracker live fills).
-    No Hyperliquid request."""
-    from app.services.hyperliquid import last_trade
+    """Light refresh for the Discover "last active" and "Open" columns:
+    {wallet: {last_trade_at, src, open}} from the trades feed service's tables
+    (last trade every 5 s; open positions re-read within seconds of a trade,
+    hl/open_positions.py) and the tracker's live fills. No Hyperliquid request.
+    The wallets asked for are passed to the feed as "on screen"."""
+    from app.services.hyperliquid import last_trade, open_positions
     ws = [w.strip().lower() for w in wallets.split(",") if w.strip()][:100]
     await last_trade.refresh_feed()
+    await open_positions.watch(ws)
+    opens = await open_positions.summaries(ws)
     out = {}
     for w in ws:
         ms, src = last_trade.last_trade(w)
-        out[w] = {"last_trade_at": last_trade.iso(ms) if ms else None, "src": src}
+        out[w] = {"last_trade_at": last_trade.iso(ms) if ms else None, "src": src,
+                  "open": opens.get(w)}
     return out
 
 

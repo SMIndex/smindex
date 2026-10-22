@@ -562,9 +562,16 @@ export async function getHlActiveBatch(wallets: string[]): Promise<Record<string
   return out;
 }
 
-// Light "last active" refresh for HL rows (2026-10-22): newest trade per wallet
-// from the server's memory (public trades feed + tracker), no venue request.
-export async function getHlLastActive(wallets: string[]): Promise<Record<string, { last_trade_at: string | null; src: string | null }>> {
+// Light "last active" + "Open" refresh for HL rows (2026-10-22): newest trade
+// per wallet and the open positions the trades feed service re-reads within
+// seconds of a trade, no venue request.
+export interface HlLiveRow {
+  last_trade_at: string | null;
+  src: string | null;
+  open?: (HlActiveSummary & { read_at?: number | null }) | null;
+}
+
+export async function getHlLastActive(wallets: string[]): Promise<Record<string, HlLiveRow>> {
   if (!wallets.length) return {};
   return api
     .get('/api/traders/hl-last-active', { params: { wallets: wallets.slice(0, 100).join(',') } })
