@@ -345,11 +345,15 @@ async def hl_active_batch(
     wallets: str = Query(..., description="comma-separated wallet addresses (max 25)"),
 ) -> dict:
     """Batch open-position summaries for HL list rows: {wallet: {count, markets,
-    pending}}. Cache-only (shares the 300s hl profile cache) + background prime,
-    same progressive contract as the Perpl active-position columns."""
-    from app.services.hyperliquid import profile as hl_profile
-    wlist = [w.strip() for w in wallets.split(",") if w.strip()][:25]
-    return hl_profile.get_active_batch(wlist)
+    pending}}. 2026-10-22: served from the trades feed's reads like
+    /hl-last-active (no Hyperliquid request); a browser still running the older
+    page used to prime 25 wallets here at critical priority (1,178 weight in
+    one minute, measured 18:13 UTC)."""
+    from app.services.hyperliquid import open_positions
+    wlist = [w.strip().lower() for w in wallets.split(",") if w.strip()][:25]
+    await open_positions.watch(wlist)
+    out = await open_positions.summaries(wlist)
+    return {w: {"count": v["count"], "markets": v["markets"], "pending": v["pending"]} for w, v in out.items()}
 
 
 async def _leaderboard_entry(wallet: str, exchange: str = "perpl") -> dict | None:
