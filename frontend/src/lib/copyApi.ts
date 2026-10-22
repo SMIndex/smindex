@@ -42,7 +42,7 @@ export interface TraderListItem extends ActivePositionSummary {
   source: string;
   last_fill_at?: string | null;   // ISO UTC of the most recent detected fill
   last_trade_at?: string | null;  // HL: newest real fill (wallet + sub-accounts)
-  last_trade_src?: 'live' | 'hourly' | null;
+  last_trade_src?: string | null;      // 'live' | 'feed' | 'rest' | 'hourly'
   activity?: TraderActivity | null;
   fill_stats?: TraderFillStats | null;
 }
@@ -560,6 +560,15 @@ export async function getHlActiveBatch(wallets: string[]): Promise<Record<string
     }
   }
   return out;
+}
+
+// Light "last active" refresh for HL rows (2026-10-22): newest trade per wallet
+// from the server's memory (public trades feed + tracker), no venue request.
+export async function getHlLastActive(wallets: string[]): Promise<Record<string, { last_trade_at: string | null; src: string | null }>> {
+  if (!wallets.length) return {};
+  return api
+    .get('/api/traders/hl-last-active', { params: { wallets: wallets.slice(0, 100).join(',') } })
+    .then((r) => r.data);
 }
 
 export interface HlBasisRow {

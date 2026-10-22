@@ -83,6 +83,9 @@ async def list_traders(
     the page. Everything else is served from the 60 s cache and the live
     active-position column is re-attached per request."""
     exch = _exchange(exchange)          # validate before the key, so PERPL and perpl share one entry
+    if exch == "hl":
+        from app.services.hyperliquid import last_trade
+        await last_trade.refresh_feed()
     if wallets:
         return _attach_hl_last_trade(
             await _build_trader_list(skip, limit, sort, period, exch, with_positions, wallets), exch)
@@ -315,6 +318,21 @@ async def equity_batch(
     covering the selected timeframe (downsampled to `points`, first+last preserved)."""
     wlist = [w.strip() for w in wallets.split(",") if w.strip()][:50]
     return await equity_service.get_series_batch(wlist, timeframe=timeframe, points=points, period=period, days=days, exchange=_exchange(exchange))
+
+
+@router.get("/hl-last-active")
+async def hl_last_active(wallets: str = Query(..., description="comma-separated, max 100")) -> dict:
+    """Light refresh for the Discover "last active" column: {wallet: {last_trade_at,
+    src}} from memory (trades feed table reloaded every 5 s, tracker live fills).
+    No Hyperliquid request."""
+    from app.services.hyperliquid import last_trade
+    ws = [w.strip().lower() for w in wallets.split(",") if w.strip()][:100]
+    await last_trade.refresh_feed()
+    out = {}
+    for w in ws:
+        ms, src = last_trade.last_trade(w)
+        out[w] = {"last_trade_at": last_trade.iso(ms) if ms else None, "src": src}
+    return out
 
 
 @router.get("/hl-active")

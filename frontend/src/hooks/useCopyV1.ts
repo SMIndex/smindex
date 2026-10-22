@@ -195,10 +195,36 @@ export function useTraders(params?: { sort?: string; period?: string; limit?: nu
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [load]);
 
+  // HL "last active" every 15 s while visible: only that column is patched.
+  const walletsRef = useRef<string[]>([]);
+  walletsRef.current = traders.map((t) => t.wallet_address);
+  useEffect(() => {
+    if (exchange !== 'hl') return;
+    const tick = async () => {
+      if (document.hidden || !walletsRef.current.length) return;
+      try {
+        const m = await copyApi.getHlLastActive(walletsRef.current);
+        setTraders((prev) => {
+          let changed = false;
+          const next = prev.map((t) => {
+            const v = m[t.wallet_address.toLowerCase()];
+            if (!v || !v.last_trade_at || v.last_trade_at === t.last_trade_at) return t;
+            changed = true;
+            return { ...t, last_trade_at: v.last_trade_at, last_trade_src: v.src ?? undefined };
+          });
+          return changed ? next : prev;
+        });
+      } catch { /* keep the values on screen */ }
+    };
+    const id = setInterval(tick, LAST_ACTIVE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [exchange]);
+
   return { traders, loading, fetching, error, refresh: load };
 }
 
 const LIST_REFRESH_MS = 60_000;
+const LAST_ACTIVE_REFRESH_MS = 15_000;
 
 function keepHlPositions(prev: TraderListItem[], next: TraderListItem[]): TraderListItem[] {
   if (!prev.length) return next;

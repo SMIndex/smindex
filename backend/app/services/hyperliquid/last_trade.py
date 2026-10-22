@@ -19,6 +19,13 @@ Two sources, the newest wins:
     newest-first read of its main account per day, so an older last trade
     still shows (sub-accounts idle for over 2 h before the first read are not searched until they trade again).
 
+2026-10-22: a third source, the newest of all three wins:
+  * feed: scripts/hl_trades_feed.py (service smindex-hl-trades) listens to
+    Hyperliquid's public trades feed for every coin and writes each listed
+    wallet's newest trade (wallet or sub-account) to hl_last_active every 5 s.
+    Measured 10-22: 0.35 s median delay, 0 missed of 2,275 checked fills.
+    The hourly per-wallet pass below is switched off (HOURLY_PASS_ENABLED).
+
 A wallet the tracker does not follow shows the hourly value (fallback); the
 tracker's 10 real-time slots are Hyperliquid's per-IP cap and adding wallets to
 its 15 s poll tier would add per-minute requests, so the tracked set is not
@@ -44,6 +51,8 @@ SUBS_TTL_SEC = 24 * 3600
 PAUSE_SEC = 6.0                     # ~200 weight/min at most during a pass
 ACTIVE_MS = 7 * 24 * 3600 * 1000    # an account with a fill this recent is read every pass
 IDLE_EVERY_SEC = 24 * 3600          # idle accounts and the newest-first fallback: once a day
+HOURLY_PASS_ENABLED = False         # replaced by the trades feed (2026-10-22); code kept
+FEED_CACHE_SEC = 5.0                # the feed writes every 5 s
 
 _hourly: dict[str, int] = {}        # wallet -> newest fill ms (wallet + sub-accounts)
 _acct_last: dict[str, int] = {}     # account -> newest fill ms seen
@@ -52,20 +61,43 @@ _subs: dict[str, tuple[float, list[str]]] = {}
 _acct_due: dict[str, float] = {}    # account -> monotonic time it is next read
 _newest_tried: dict[str, float] = {}  # wallet -> monotonic time of its newest-first read
 _task: asyncio.Task | None = None
+_feed: dict[str, int] = {}          # wallet -> newest trade ms written by the trades feed
+_feed_src: dict[str, str] = {}      # wallet -> 'feed' | 'rest'
+_feed_at = 0.0
+_feed_lock = asyncio.Lock()
 _last_run: dict = {}
 
 
 def last_trade(wallet: str) -> tuple[int | None, str | None]:
-    """(newest fill ms, 'live' | 'hourly') for a wallet, or (None, None)."""
+    """(newest fill ms, 'live' | 'feed' | 'rest' | 'hourly') for a wallet, or (None, None)."""
     from app.services.hyperliquid import tracker
     w = wallet.lower()
-    live = tracker.last_fill_ms.get(w)
-    hourly = _hourly.get(w)
-    if live is None and hourly is None:
-        return None, None
-    if hourly is None or (live is not None and live >= hourly):
-        return live, "live"
-    return hourly, "hourly"
+    cands = [(tracker.last_fill_ms.get(w), "live"), (_feed.get(w), _feed_src.get(w, "feed")),
+             (_hourly.get(w), "hourly")]
+    best = max((c for c in cands if c[0]), key=lambda c: c[0], default=(None, None))
+    return best
+
+
+async def refresh_feed() -> None:
+    """Reload the trades feed's table into memory at most every FEED_CACHE_SEC.
+    A missing table (feed never ran) or a DB error keeps the previous values."""
+    global _feed_at
+    if time.monotonic() - _feed_at < FEED_CACHE_SEC:
+        return
+    async with _feed_lock:
+        if time.monotonic() - _feed_at < FEED_CACHE_SEC:
+            return
+        _feed_at = time.monotonic()
+        try:
+            sf = get_session_factory()
+            async with sf() as s:
+                rows = (await s.execute(text(
+                    "SELECT wallet, last_trade_ms, src FROM hl_last_active"))).all()
+            for w, ms, src in rows:
+                _feed[w] = int(ms)
+                _feed_src[w] = src or "feed"
+        except Exception as exc:
+            logger.debug("hl last trade: feed table read failed: %s", exc)
 
 
 def iso(ms: int) -> str:
@@ -189,6 +221,8 @@ async def refresh(wallets: list[str] | None = None) -> dict:
 def start_refresh() -> None:
     """Called after each hourly ingest; a pass still running is never doubled."""
     global _task
+    if not HOURLY_PASS_ENABLED:
+        return
     if _task is not None and not _task.done():
         logger.info("hl last trade refresh still running, this hour skipped")
         return
