@@ -50,7 +50,7 @@ _ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 TIER1_TTL = 300.0
 TAB_TTL = 600.0
-TAB_TTL_LONG = 3600.0
+TAB_TTL_LONG = 60.0                # orders + extras (was 3600 s until 2026-10-22)
 PAGE_CAP = 3                    # hard cap per paginated tab fetch
 HIP3_LABEL = "canonical dex only"
 
@@ -573,7 +573,7 @@ import asyncio as _asyncio
 import random as _random
 
 PERPL_TTL = 300.0
-_PERPL_NOACCT_TTL = 3600.0
+_PERPL_NOACCT_TTL = 60.0         # a new account shows within a minute (was 3600 s)
 _perpl_cache: dict[str, tuple[float, dict]] = {}
 _perpl_noacct: dict[str, float] = {}
 _chain_gate = _asyncio.Semaphore(1)
