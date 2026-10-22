@@ -17,6 +17,7 @@ Rules (implementation prompt, phase 3):
 import asyncio
 import os
 import tempfile
+import time
 from datetime import datetime, timedelta
 
 import httpx
@@ -32,7 +33,8 @@ logger = get_logger(__name__)
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-INTERVAL_SEC = 3600
+INTERVAL_SEC = 3600                # longest gap between ingests
+CHECK_SEC = 300                    # header check (ETag / Last-Modified / size): ingest as soon as the file changes
 FIRST_RUN_DELAY_SEC = 60
 RETRY_DELAY_SEC = 60
 # Eligibility (matches Hyperliquid's own leaderboard rules): only accounts with
@@ -238,9 +240,50 @@ async def run_once() -> dict:
             pass
 
 
+_file_sig: str | None = None        # header signature of the last ingested file
+_last_ingest = 0.0
+stats_check = {"checks": 0, "changed": 0, "check_errors": 0}
+
+
+async def _file_signature() -> str | None:
+    """ETag + Last-Modified + Content-Length of the leaderboard file (a HEAD on
+    the stats-data host: no info-API weight, no body)."""
+    try:
+        async with hl_client_stream("HEAD", LEADERBOARD_URL, headers={"User-Agent": USER_AGENT},
+                                    timeout=httpx.Timeout(20.0, connect=10.0)) as resp:
+            if resp.status_code != 200:
+                return None
+            h = resp.headers
+            return f"{h.get('etag')}|{h.get('last-modified')}|{h.get('content-length')}"
+    except Exception as exc:
+        logger.debug("HL leaderboard header check failed: %s", exc)
+        return None
+
+
+def hl_client_stream(method: str, url: str, **kw):
+    from app.services.hyperliquid import client as hl_client
+    return hl_client.stream(method, url, **kw)
+
+
 async def _loop() -> None:
+    """Ingest at start, then check the file's headers every CHECK_SEC and ingest
+    as soon as they change; never more than INTERVAL_SEC between ingests."""
+    global _file_sig, _last_ingest
     await asyncio.sleep(FIRST_RUN_DELAY_SEC)
     while True:
+        sig = await _file_signature()
+        stats_check["checks"] += 1
+        if sig is None:
+            stats_check["check_errors"] += 1
+        due = (time.monotonic() - _last_ingest >= INTERVAL_SEC or _last_ingest == 0.0
+               or (sig is not None and sig != _file_sig))
+        if not due:
+            await asyncio.sleep(CHECK_SEC)
+            continue
+        if _last_ingest and sig is not None and sig != _file_sig:
+            stats_check["changed"] += 1
+        _last_ingest = time.monotonic()
+        _file_sig = sig
         try:
             await run_once()
             await _warm_lb_cache()
@@ -269,7 +312,8 @@ async def _loop() -> None:
             except Exception as exc2:
                 logger.error("HL leaderboard ingest retry failed (%s), keeping "
                              "previous data until next cycle", exc2)
-        await asyncio.sleep(INTERVAL_SEC)
+                _file_sig = None             # failed: the next check ingests again
+        await asyncio.sleep(CHECK_SEC)
 
 
 async def _backfill_last_fill() -> None:
@@ -312,7 +356,7 @@ def start() -> None:
     global _task
     if _task is None or _task.done():
         _task = asyncio.get_event_loop().create_task(_loop())
-        logger.info("HL leaderboard ingest task started (interval %ss)", INTERVAL_SEC)
+        logger.info("HL leaderboard ingest task started (check every %ss, ingest on change, at most %ss apart)", CHECK_SEC, INTERVAL_SEC)
 
 
 async def stop() -> None:
