@@ -470,13 +470,17 @@ async def get_trader_equity(
 async def get_trader_hl_state(wallet: str) -> dict:
     """Hyperliquid profile depth: live positions (incl. liquidation price),
     grouped TP/SL, resting adds, pending trigger entries, copyable-on-Perpl %.
-    300s in-process cache per wallet. Read-only public HL info API."""
+    Read-only public HL info API. 2026-10-22: the page polls this every 15 s;
+    positions are at most 15 s old and the trades feed re-reads them within
+    seconds of a trade (profile.get_profile_state_live), orders as before."""
+    from app.services.hyperliquid import open_positions
     from app.services.hyperliquid import profile as hl_profile
     prof = await trader_profiles.get_profile(wallet, exchange="hl")
     if prof and prof.get("is_hidden"):
         raise HTTPException(status_code=404, detail="Trader not found")
+    await open_positions.watch([wallet], profile=True)
     try:
-        return await hl_profile.get_profile_state(wallet)
+        return await hl_profile.get_profile_state_live(wallet)
     except Exception as exc:
         logger.warning("hl-state failed for %s: %s", wallet[:10], exc)
         raise HTTPException(status_code=502, detail="Hyperliquid state unavailable")

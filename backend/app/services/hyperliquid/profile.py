@@ -700,7 +700,71 @@ async def get_profile_state(wallet: str, deep: bool = True,
         orders = await hl_client.decode_json(oo_resp) or []
     finally:
         _fg_active[0] -= 1
+    _orders_raw[wallet] = (now, orders)
+    return await _build_state(wallet, state, orders, deep, now, "read")
 
+
+# Profile page live positions (2026-10-22): the page polls hl-state every 15 s
+# while visible. Positions there are at most POS_FRESH_SEC old: the trades feed
+# service re-reads a watched wallet within seconds of each trade
+# (open_positions.state_row); when its read is newer it is used with no venue
+# call, otherwise one clearinghouseState read (2 weight). Open orders (TP/SL
+# grouping) are read again when the positions changed and the orders are over
+# POS_FRESH_SEC old, otherwise kept up to _CACHE_TTL as before.
+POS_FRESH_SEC = 15.0
+_orders_raw: dict[str, tuple[float, list]] = {}
+
+
+def _pos_sig(positions) -> list:
+    return sorted((p["coin"], p["side"], round(p["size"], 8)) for p in positions)
+
+
+async def get_profile_state_live(wallet: str) -> dict:
+    wallet = (wallet or "").lower()
+    now = time.monotonic()
+    c = _cache.get(wallet)
+    if not c or now - c[0] >= _CACHE_TTL or wallet not in _orders_raw:
+        return await get_profile_state(wallet)
+    now_ms = time.time() * 1000
+    cur_ms = c[1].get("positions_as_of_ms") or 0
+    feed = None
+    try:
+        from app.services.hyperliquid import open_positions
+        feed = await open_positions.state_row(wallet)
+    except Exception as exc:
+        logger.warning("hl profile: feed positions read failed for %s: %s", wallet[:10], exc)
+    if feed and feed["state_ms"] > cur_ms and now_ms - feed["read_ms"] <= POS_FRESH_SEC * 1000:
+        state, src = feed["state"], "feed"
+    elif now_ms - cur_ms <= POS_FRESH_SEC * 1000:
+        return c[1]
+    else:
+        _fg_active[0] += 1
+        try:
+            r = await hl_client.post_info({"type": "clearinghouseState", "user": wallet},
+                                          priority=hl_client.CRITICAL, timeout=15.0)
+            r.raise_for_status()
+            state = await hl_client.decode_json(r)
+        finally:
+            _fg_active[0] -= 1
+        src = "read"
+    orders_at, orders = _orders_raw[wallet]
+    new_sig = sorted((str(ap.get("position", {}).get("coin", "")).upper(),
+                      "long" if _f(ap.get("position", {}).get("szi")) > 0 else "short",
+                      round(abs(_f(ap.get("position", {}).get("szi"))), 8))
+                     for ap in state.get("assetPositions", []) if _f(ap.get("position", {}).get("szi")) != 0)
+    if new_sig != _pos_sig(c[1].get("positions", [])) and now - orders_at >= POS_FRESH_SEC:
+        r = await hl_client.post_info({"type": "frontendOpenOrders", "user": wallet},
+                                      priority=hl_client.CRITICAL, timeout=15.0)
+        r.raise_for_status()
+        orders = await hl_client.decode_json(r) or []
+        orders_at = now
+        _orders_raw[wallet] = (orders_at, orders)
+    # cache time = the older input, so no consumer keeps orders past _CACHE_TTL
+    return await _build_state(wallet, state, orders, False, min(orders_at, now), src)
+
+
+async def _build_state(wallet: str, state: dict, orders: list, deep: bool, now: float,
+                       src: str) -> dict:
     mmap = await _market_map()
 
     positions = []
@@ -822,6 +886,9 @@ async def get_profile_state(wallet: str, deep: bool = True,
         "pending_entries": pending_entries,
         "copyable_pct": round(mapped_notional / total_notional * 100, 1) if total_notional > 0 else None,
         "fetched_at": time.time(),
+        # 2026-10-22: Hyperliquid's own timestamp of the positions, and where they came from
+        "positions_as_of_ms": int(state.get("time") or time.time() * 1000),
+        "positions_src": src,
     }
     _cache[wallet] = (now, data)
     _failed.pop(wallet, None)

@@ -386,6 +386,20 @@ export function useTrader(wallet: string | undefined, timeframe: import('@/lib/c
     load();
   }, [load]);
 
+  // HL positions every 15 s while the page is visible (2026-10-22): the server
+  // keeps them at most 15 s old and re-reads them within seconds of a trade.
+  useEffect(() => {
+    if (exchange !== 'hl' || !wallet) return;
+    const id = setInterval(() => {
+      if (document.hidden) return;
+      const seq = loadSeq.current;
+      copyApi.getTraderHlState(wallet).then((hs) => {
+        if (loadSeq.current === seq && hs) { setHlState(hs); setHlError(false); }
+      }).catch(() => { /* keep the positions on screen */ });
+    }, HL_STATE_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [exchange, wallet]);
+
   // While HL open-time dating runs server-side, re-poll just hl-state until
   // the funding-ledger dates land (resolver is rate-limit paced, ~1-2 min).
   const datingPending = !!hlState?.positions?.some((p) => p.opened_at_pending);
