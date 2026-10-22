@@ -531,7 +531,7 @@ export interface HlActiveSummary {
 // column refreshes every 5 minutes instead of once per browser session. While
 // the server is still priming a wallet (pending), the last known summary keeps
 // showing. Failures (count:null) are NOT cached. Backend accepts max 25 wallets/request.
-const HL_ACTIVE_TTL_MS = 5 * 60 * 1000 - 15_000;   // just under 5 min, so the 60 s list poll at minute 5 refreshes it
+const HL_ACTIVE_TTL_MS = 4 * 60 * 1000;   // expires at 4 min, so one of the 60 s list polls refreshes it within 5 min
 const hlActiveSession = new Map<string, { s: HlActiveSummary; at: number }>();
 
 export async function getHlActiveBatch(wallets: string[]): Promise<Record<string, HlActiveSummary>> {
