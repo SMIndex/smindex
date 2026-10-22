@@ -21,6 +21,23 @@ Measured 2026-10-22 (scripts/probe_hl_trades_feed.py): 0.35 s median delay,
   * hl_feed_status (one row) is written every WRITE_SEC: the monitor alerts on
     Telegram when it is older than 5 minutes or disconnected
 REST reads use their own pacing (REST_WEIGHT_PER_MIN) so the app keeps its budget.
+
+Open positions (2026-10-22, Discover "Open" column and the HL profile page):
+  * every master wallet on the list or on screen has its main-perp sizes from
+    one clearinghouseState read (2 weight), then follows its trades in this
+    feed; a trade that opens, closes or flips a position (the open count can
+    change) re-reads it after POS_GATHER_SEC, at most once per POS_MIN_GAP_SEC
+  * a wallet with an open profile page is re-read on every trade (sizes)
+  * wallets on screen (hl_feed_watch, written by the app) get a count-only
+    safety read every POS_SWEEP_SEC; reconnects forget the sizes
+  * each read lands in hl_open_positions at once; the app serves it
+  * hard cap POS_WPM_MAX weight per minute for these reads
+
+Coins (2026-10-22): a main, HIP-3 or spot coin stays subscribed only while a
+listed wallet or sub-account traded it in the last KEEP_DAYS (this feed's own
+record in hl_feed_coin_seen, the hourly fill sampler's hl_fill_events, and an
+hourly look at the last 30 trades of every dropped coin); the room goes to
+outcome sides, newest first. PROBE_SLOTS of MAX_SUBS are kept for that look.
 """
 import asyncio
 import json
@@ -32,7 +49,7 @@ import httpx
 import websockets
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from sqlalchemy import text  # noqa: E402
+from sqlalchemy import bindparam, text  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 from app.config import settings  # noqa: E402
@@ -53,6 +70,16 @@ SILENT_SEC = 90.0
 SUB_SEND_PAUSE = 0.1               # 600 subscribe messages/min, under the 2000 sent/min cap
 REST_WEIGHT_PER_MIN = float(os.environ.get("HL_FEED_REST_WPM", "120"))
 LISTED_PER_WINDOW = 50
+POS_GATHER_SEC = 0.5               # collect the rest of a burst before the read
+POS_MIN_GAP_SEC = 5.0              # at most one read per wallet per 5 s
+POS_SWEEP_SEC = 300                # count-only safety read for wallets on screen
+POS_WPM_MAX = float(os.environ.get("HL_FEED_POS_WPM", "300"))
+POS_CONCURRENCY = 4
+POS_BUF_MS = 30_000                # trades kept to replay over a read in flight
+WATCH_RELOAD_SEC = 5.0
+KEEP_DAYS = 7
+PROBE_SLOTS = 10                   # subscriptions kept free for the dropped-coin look
+PROBE_HOLD_SEC = 3.0
 
 engine = create_async_engine(settings.DATABASE_URL, pool_size=2, max_overflow=0, pool_recycle=1800)
 Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -71,6 +98,24 @@ state = {"connected": 0, "last_msg": 0.0, "msgs": 0, "trades": 0, "matched": 0, 
          "rest_requests": 0, "rest_weight": 0, "rest_429": 0, "coins": 0, "coins_skipped": 0,
          "drop_ms": None, "started": time.time()}
 ws_ref = {"ws": None}
+
+main_coins: set[str] = set()
+watch: set[str] = set()            # masters on screen (Discover rows, profile pages)
+watch_profile: set[str] = set()    # masters with an open profile page
+pos_szi: dict[str, dict[str, float]] = {}   # master -> main-perp coin -> size
+pos_state_ms: dict[str, int] = {}  # master -> 'time' of the state pos_szi came from
+pos_last_read: dict[str, float] = {}
+pos_due: dict[str, list] = {}      # master -> [due_mono, trade_ms, recv_ms, reason]
+pos_inflight: set[str] = set()
+pos_buf: dict[str, list] = {}      # master -> [(trade_ms, coin, delta)]
+pos_win: list = []                 # (mono, weight) of reads in the last 60 s
+pos_stats = {"reads": 0, "weight": 0, "r429": 0, "errors": 0, "lat": {}, "by": {}}
+coin_seen: dict[str, int] = {}     # coin -> newest listed trade ms
+coin_dirty: set[str] = set()
+probe_q: list[str] = []
+probe_subs: set[str] = set()
+probe_info = {"total": 0, "passes": 0, "fast": True}
+first_probe_done = asyncio.Event()
 
 
 async def info(body: dict):
@@ -110,7 +155,22 @@ async def ensure_tables():
             " msgs BIGINT NOT NULL, trades BIGINT NOT NULL, matched BIGINT NOT NULL, reconnects INT NOT NULL,"
             " rest_requests INT NOT NULL, rest_weight BIGINT NOT NULL, rest_429 INT NOT NULL,"
             " updated_at DATETIME NOT NULL)"))
+        await c.execute(text(
+            "CREATE TABLE IF NOT EXISTS hl_open_positions ("
+            " wallet VARCHAR(42) NOT NULL PRIMARY KEY,"
+            " n INT NOT NULL, markets JSON NOT NULL, state MEDIUMTEXT NOT NULL,"
+            " state_ms BIGINT NOT NULL, read_ms BIGINT NOT NULL,"
+            " trade_ms BIGINT NULL, recv_ms BIGINT NULL, reason VARCHAR(8) NOT NULL)"))
+        await c.execute(text(
+            "CREATE TABLE IF NOT EXISTS hl_feed_watch ("
+            " wallet VARCHAR(42) NOT NULL PRIMARY KEY,"
+            " seen_until DATETIME NOT NULL, profile_until DATETIME NULL)"))
+        await c.execute(text(
+            "CREATE TABLE IF NOT EXISTS hl_feed_coin_seen ("
+            " coin VARCHAR(40) NOT NULL PRIMARY KEY, last_ms BIGINT NOT NULL)"))
     async with Session() as s:
+        for coin, ms in (await s.execute(text("SELECT coin, last_ms FROM hl_feed_coin_seen"))).all():
+            coin_seen[coin] = int(ms)
         for w, ms, src in (await s.execute(text("SELECT wallet, last_trade_ms, src FROM hl_last_active"))).all():
             last_ms[w] = int(ms)
             src_of[w] = src
@@ -151,9 +211,27 @@ async def refresh_accounts(wallets: list[str], with_subs: bool) -> None:
     logger.info("hl trades feed: account map %d wallets, %d accounts", len(wallets), len(acct_of))
 
 
+async def traded_coins() -> set[str]:
+    """Coins a listed wallet or sub-account traded in the last KEEP_DAYS: this
+    feed's record (snapshots of probed coins included), the hourly fill
+    sampler (listed masters), plus every coin a tracked wallet holds now."""
+    cut = int(time.time() * 1000) - KEEP_DAYS * 86400 * 1000
+    out = {c for c, ms in coin_seen.items() if ms >= cut}
+    out |= {c for sz in pos_szi.values() for c in sz}
+    masters = list(accts_of)
+    if masters:
+        async with Session() as s:
+            rows = (await s.execute(text(
+                "SELECT DISTINCT coin FROM hl_fill_events WHERE wallet_address IN :w AND ts_ms >= :c"
+            ).bindparams(bindparam("w", expanding=True)), {"w": masters, "c": cut})).scalars().all()
+        out |= set(rows)
+    return out
+
+
 async def coin_list() -> tuple[list[str], int]:
-    """Main + HIP-3 perps first (all active), then spot pairs and outcome sides
-    by volume / newest, cut at MAX_SUBS."""
+    """Main + HIP-3 perps and spot pairs (volume above 0) that listed wallets
+    traded in the last KEEP_DAYS, then outcome sides newest first, cut at
+    MAX_SUBS - PROBE_SLOTS. The dropped coins go to the hourly look."""
     main = [u["name"] for u in (await info({"type": "meta"}))["universe"] if not u.get("isDelisted")]
     hip3: list[str] = []
     for d in await info({"type": "perpDexs"}):
@@ -167,8 +245,26 @@ async def coin_list() -> tuple[list[str], int]:
     outcome = []
     for o in sorted(om.get("outcomes") or [], key=lambda x: -int(x["outcome"])):
         outcome += [f"#{int(o['outcome']) * 10 + i}" for i in range(len(o.get("sideSpecs") or [0, 1]))]
-    want = main + hip3 + spot + outcome
-    return want[:MAX_SUBS], max(0, len(want) - MAX_SUBS)
+    main_coins.clear()
+    main_coins.update(main)
+    traded = await traded_coins()
+    base = main + hip3 + spot
+    keep = [c for c in base if c in traded]
+    dropped = [c for c in base if c not in traded]
+    cap = MAX_SUBS - PROBE_SLOTS
+    want = (keep + outcome)[:cap]
+    left = (keep + outcome)[cap:]
+    probe_q[:] = dropped
+    probe_info["total"] = len(dropped)
+    kinds = {**{c: "main" for c in main}, **{c: "hip3" for c in hip3}, **{c: "spot" for c in spot}}
+    by_kind = {k: sum(1 for c in dropped if kinds[c] == k) for k in ("main", "hip3", "spot")}
+    logger.info("hl trades feed: coins kept %d of %d (dropped main %d, hip3 %d, spot %d), outcome sides %d of %d, "
+                "total %d of cap %d + %d probe slots",
+                len(keep), len(base), by_kind["main"], by_kind["hip3"], by_kind["spot"],
+                sum(1 for c in want if c.startswith("#")), len(outcome), len(want), cap, PROBE_SLOTS)
+    if left:
+        logger.info("hl trades feed: left out %d: %s", len(left), " ".join(left))
+    return want, len(left)
 
 
 async def write_loop():
@@ -177,7 +273,13 @@ async def write_loop():
         try:
             batch = [(w, last_ms[w]) for w in list(dirty)]
             dirty.clear()
+            cbatch = [(c, coin_seen[c]) for c in list(coin_dirty)]
+            coin_dirty.clear()
             async with Session() as s:
+                for c, ms in cbatch:
+                    await s.execute(text(
+                        "INSERT INTO hl_feed_coin_seen (coin, last_ms) VALUES (:c, :ms) "
+                        "ON DUPLICATE KEY UPDATE last_ms = GREATEST(last_ms, :ms)"), {"c": c, "ms": ms})
                 for w, ms in batch:
                     await s.execute(text(
                         "INSERT INTO hl_last_active (wallet, last_trade_ms, account, src, updated_at) "
@@ -262,22 +364,73 @@ async def unseen_loop():
 
 
 async def sync_subscriptions(ws) -> None:
+    # unsubscribe first: the server-wide total must never pass the cap, not even briefly
     want = set(coins)
-    for c in [c for c in coins if c not in subscribed]:
-        await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "trades", "coin": c}}))
-        subscribed.add(c)
-        await asyncio.sleep(SUB_SEND_PAUSE)
     for c in [c for c in subscribed if c not in want]:
         await ws.send(json.dumps({"method": "unsubscribe", "subscription": {"type": "trades", "coin": c}}))
         subscribed.discard(c)
         await asyncio.sleep(SUB_SEND_PAUSE)
+    for c in [c for c in coins if c not in subscribed]:
+        await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "trades", "coin": c}}))
+        subscribed.add(c)
+        await asyncio.sleep(SUB_SEND_PAUSE)
+
+
+async def probe_loop():
+    """The hourly look at dropped coins: subscribe PROBE_SLOTS at a time for
+    PROBE_HOLD_SEC; the subscription's first message carries the coin's last
+    30 trades with users, and any listed account in them (within KEEP_DAYS)
+    lands in coin_seen, so the next refresh subscribes the coin again. The
+    first pass after start runs at once; later passes spread over the hour."""
+    while True:
+        ws = ws_ref["ws"]
+        if ws is None or not probe_q:
+            if ws is not None and not probe_q and probe_info["fast"]:
+                probe_info["fast"] = False
+                first_probe_done.set()
+            await asyncio.sleep(5)
+            continue
+        batch = probe_q[:PROBE_SLOTS]
+        del probe_q[:PROBE_SLOTS]
+        want = set(coins)
+        batch = [c for c in batch if c not in want and c not in subscribed]
+        try:
+            for c in batch:
+                await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "trades", "coin": c}}))
+                probe_subs.add(c)
+                await asyncio.sleep(SUB_SEND_PAUSE)
+            await asyncio.sleep(PROBE_HOLD_SEC)
+            for c in batch:
+                if c not in set(coins):
+                    await ws.send(json.dumps({"method": "unsubscribe", "subscription": {"type": "trades", "coin": c}}))
+                probe_subs.discard(c)
+                await asyncio.sleep(SUB_SEND_PAUSE)
+        except Exception as exc:
+            probe_subs.clear()
+            logger.warning("hl trades feed: probe failed: %s", exc)
+            continue
+        if not probe_q:
+            probe_info["passes"] += 1
+            logger.info("hl trades feed: dropped-coin look done (%d coins, pass %d)",
+                        probe_info["total"], probe_info["passes"])
+            if probe_info["fast"]:
+                probe_info["fast"] = False
+                first_probe_done.set()
+        if not probe_info["fast"]:
+            rounds = max(1.0, probe_info["total"] / PROBE_SLOTS)
+            await asyncio.sleep(max(1.0, COINS_EVERY_SEC * 0.9 / rounds - PROBE_HOLD_SEC))
 
 
 async def refresh_loop():
     """Coin list + listed wallets hourly, sub-accounts daily."""
     last_subs = time.time()
+    first = True
     while True:
-        await asyncio.sleep(COINS_EVERY_SEC)
+        if first:
+            await first_probe_done.wait()
+            first = False
+        else:
+            await asyncio.sleep(COINS_EVERY_SEC)
         try:
             ws_ = await listed_wallets()
             daily = time.time() - last_subs >= SUBS_EVERY_SEC
@@ -295,6 +448,203 @@ async def refresh_loop():
             logger.warning("hl trades feed: hourly refresh failed: %s", exc)
 
 
+# ---- open positions -------------------------------------------------------
+
+def schedule(w: str, reason: str, trade_ms: int | None, recv_ms: int | None) -> None:
+    now = time.monotonic()
+    cur = pos_due.get(w)
+    if cur is not None and not (cur[3] == "sweep" and reason != "sweep"):
+        return
+    gather = 0.0 if reason == "sweep" else POS_GATHER_SEC
+    due = max(now + gather, pos_last_read.get(w, -1e9) + POS_MIN_GAP_SEC)
+    pos_due[w] = [due, trade_ms, recv_ms, reason]
+
+
+def _apply(w: str, coin: str, d: float) -> bool:
+    """Apply one trade to the tracked sizes; True when the open count or a
+    side can change (opened, closed or flipped), or when a reducing trade
+    leaves less than its own size: measured 10-22, busy market makers' tracked
+    sizes can drift a little from Hyperliquid's (6 of 63 wallets, counts all
+    right), so a near-close is read instead of trusted."""
+    sz = pos_szi[w]
+    b = sz.get(coin, 0.0)
+    a = round(b + d, 8)
+    if abs(a) < 1e-9:
+        a = 0.0
+    if a:
+        sz[coin] = a
+    else:
+        sz.pop(coin, None)
+    return (b == 0.0) != (a == 0.0) or b * a < 0 or (abs(a) < abs(b) and abs(a) <= abs(d))
+
+
+def pos_trade(w: str, coin: str, d: float, tm: int, recv_ms: int) -> None:
+    buf = pos_buf.setdefault(w, [])
+    buf.append((tm, coin, d))
+    if len(buf) > 400 or buf[0][0] < tm - POS_BUF_MS:
+        pos_buf[w] = [x for x in buf if x[0] >= tm - POS_BUF_MS][-400:]
+    if w in pos_inflight:
+        return                        # the read in flight replays the buffer
+    if w not in pos_szi:
+        schedule(w, "new", tm, recv_ms)
+        return
+    if tm <= pos_state_ms.get(w, 0):
+        return                        # already inside the state that was read
+    if _apply(w, coin, d):
+        schedule(w, "count", tm, recv_ms)
+    elif w in watch_profile:
+        schedule(w, "size", tm, recv_ms)
+
+
+async def pos_take(weight: int) -> None:
+    while True:
+        now = time.monotonic()
+        while pos_win and pos_win[0][0] < now - 60:
+            pos_win.pop(0)
+        if sum(x[1] for x in pos_win) + weight <= POS_WPM_MAX:
+            pos_win.append((now, weight))
+            return
+        await asyncio.sleep(0.2)
+
+
+async def pos_read(w: str, item: list) -> None:
+    _, trade_ms, recv_ms, reason = item
+    try:
+        await pos_take(2)
+        r = await http.post(INFO_URL, json={"type": "clearinghouseState", "user": w})
+        pos_stats["reads"] += 1
+        pos_stats["weight"] += 2
+        pos_stats["by"][reason] = pos_stats["by"].get(reason, 0) + 1
+        if r.status_code == 429:
+            pos_stats["r429"] += 1
+            pos_szi.pop(w, None)
+            logger.warning("hl trades feed: 429 on clearinghouseState, positions wait 10 s")
+            await asyncio.sleep(10)
+            return
+        r.raise_for_status()
+        body = r.json()
+    except Exception as exc:
+        pos_stats["errors"] += 1
+        pos_szi.pop(w, None)
+        logger.warning("hl trades feed: positions read failed for %s: %s", w[:10], exc)
+        return
+    finally:
+        pos_last_read[w] = time.monotonic()
+    now_ms = int(time.time() * 1000)
+    st_ms = int(body.get("time") or now_ms)
+    szi: dict[str, float] = {}
+    for ap in body.get("assetPositions") or []:
+        p = ap.get("position") or {}
+        v = float(p.get("szi") or 0)
+        if v:
+            szi[str(p.get("coin"))] = v
+    markets = [{"symbol": c, "side": "long" if v > 0 else "short"} for c, v in szi.items()]
+    pos_szi[w] = dict(szi)
+    pos_state_ms[w] = st_ms
+    changed_at = None
+    # trades that arrived while the read was in flight and are newer than the
+    # state (several fills of one order share a millisecond: no dedupe by time)
+    for tm, coin, d in list(pos_buf.get(w, [])):
+        if tm > st_ms and _apply(w, coin, d):
+            changed_at = tm
+    try:
+        async with Session() as s:
+            await s.execute(text(
+                "INSERT INTO hl_open_positions (wallet, n, markets, state, state_ms, read_ms, trade_ms, recv_ms, reason) "
+                "VALUES (:w, :n, :m, :st, :sm, :rm, :tm, :rv, :rs) ON DUPLICATE KEY UPDATE n = VALUES(n), "
+                "markets = VALUES(markets), state = VALUES(state), state_ms = VALUES(state_ms), "
+                "read_ms = VALUES(read_ms), trade_ms = VALUES(trade_ms), recv_ms = VALUES(recv_ms), reason = VALUES(reason)"),
+                {"w": w, "n": len(markets), "m": json.dumps(markets), "st": json.dumps(body), "sm": st_ms,
+                 "rm": int(time.time() * 1000), "tm": trade_ms, "rv": recv_ms, "rs": reason})
+            await s.commit()
+    except Exception as exc:
+        logger.warning("hl trades feed: positions write failed for %s: %s", w[:10], exc)
+    if trade_ms:
+        pos_stats["lat"].setdefault(reason, []).append(int(time.time() * 1000) - trade_ms)
+    if changed_at is not None:
+        schedule(w, "count", changed_at, None)
+
+
+async def pos_loop():
+    sem = asyncio.Semaphore(POS_CONCURRENCY)
+
+    async def run(w, item):
+        pos_inflight.add(w)
+        try:
+            await pos_read(w, item)
+        finally:
+            pos_inflight.discard(w)
+            sem.release()
+
+    while True:
+        await asyncio.sleep(0.1)
+        now = time.monotonic()
+        ready = sorted((v[3] == "sweep", v[0], w) for w, v in list(pos_due.items())
+                       if v[0] <= now and w not in pos_inflight)
+        for _, _, w in ready:
+            if sem.locked():
+                break
+            item = pos_due.pop(w)
+            await sem.acquire()
+            asyncio.create_task(run(w, item))
+
+
+async def pos_sweep_loop():
+    """Wallets on screen: a first read when unknown, then a count-only safety
+    read every POS_SWEEP_SEC (event reads count as fresh). A failed first read
+    is retried after 60 s."""
+    while True:
+        await asyncio.sleep(2)
+        now = time.monotonic()
+        for w in list(watch):
+            if w in pos_due or w in pos_inflight:
+                continue
+            last = pos_last_read.get(w)
+            if w not in pos_szi:
+                if last is None or now - last >= 60:
+                    schedule(w, "new", None, None)
+            elif now - last >= POS_SWEEP_SEC:
+                schedule(w, "sweep", None, None)
+
+
+async def watch_loop():
+    """hl_feed_watch (the app writes the wallets on screen) every WATCH_RELOAD_SEC,
+    and a positions stats line every minute."""
+    last_stats = time.monotonic()
+    last_clean = 0.0
+    while True:
+        await asyncio.sleep(WATCH_RELOAD_SEC)
+        try:
+            async with Session() as s:
+                rows = (await s.execute(text(
+                    "SELECT wallet, profile_until IS NOT NULL AND profile_until > UTC_TIMESTAMP() "
+                    "FROM hl_feed_watch WHERE seen_until > UTC_TIMESTAMP()"))).all()
+                if time.monotonic() - last_clean > 3600:
+                    await s.execute(text(
+                        "DELETE FROM hl_feed_watch WHERE seen_until < UTC_TIMESTAMP() - INTERVAL 1 DAY"))
+                    await s.commit()
+                    last_clean = time.monotonic()
+            watch.clear()
+            watch.update(str(w).lower() for w, _ in rows)
+            watch_profile.clear()
+            watch_profile.update(str(w).lower() for w, p in rows if p)
+        except Exception as exc:
+            logger.warning("hl trades feed: watch reload failed: %s", exc)
+        if time.monotonic() - last_stats >= 60:
+            def q3(v):
+                v = sorted(v)
+                return [round(v[min(len(v) - 1, int(len(v) * f))] / 1000, 2) for f in (0.5, 0.95, 1.0)]
+            lat = {k: q3(v) for k, v in pos_stats["lat"].items()}
+            logger.info("hl trades feed: positions minute: reads %d %s, weight/min %.0f, 429 %d, errors %d, "
+                        "trade to row s [p50,p95,max] %s, tracked %d, on screen %d, profile %d, subs %d+%d",
+                        pos_stats["reads"], json.dumps(pos_stats["by"], sort_keys=True),
+                        sum(x[1] for x in pos_win), pos_stats["r429"], pos_stats["errors"],
+                        json.dumps(lat, sort_keys=True), len(pos_szi), len(watch), len(watch_profile),
+                        len(subscribed), len(probe_subs))
+            pos_stats.update({"reads": 0, "weight": 0, "r429": 0, "errors": 0, "lat": {}, "by": {}})
+            last_stats = time.monotonic()
+
+
 async def ws_loop():
     backoff = 1.0
     while True:
@@ -302,6 +652,9 @@ async def ws_loop():
         try:
             async with websockets.connect(WS_URL, ping_interval=None, close_timeout=5, max_size=16_000_000) as ws:
                 subscribed.clear()
+                probe_subs.clear()
+                pos_szi.clear()           # trades were missed while down: read again
+                pos_state_ms.clear()
                 ws_ref["ws"] = ws
                 t0 = int(time.time() * 1000)
                 sub_task = asyncio.create_task(sync_subscriptions(ws))
@@ -334,13 +687,25 @@ async def ws_loop():
                     msg = json.loads(raw)
                     if msg.get("channel") != "trades":
                         continue
+                    now_ms = int(time.time() * 1000)
+                    keep_cut = now_ms - KEEP_DAYS * 86400 * 1000
                     for t in msg.get("data") or []:
                         tm = int(t.get("time") or 0)
+                        coin = t.get("coin")
+                        users = [u.lower() for u in t.get("users") or []]
+                        for u in users:
+                            if u in acct_of and tm >= keep_cut and tm > coin_seen.get(coin, 0):
+                                coin_seen[coin] = tm
+                                coin_dirty.add(coin)
+                        if coin in main_coins and now_ms - tm < 60_000:
+                            for i, u in enumerate(users[:2]):
+                                if u in accts_of or u in watch:
+                                    d = float(t.get("sz") or 0) * (1 if i == 0 else -1)
+                                    pos_trade(u, coin, d, tm, now_ms)
                         if tm < t0 - 600_000:
                             continue          # old trades in the subscription snapshot
                         state["trades"] += 1
-                        for u in t.get("users") or []:
-                            u = u.lower()
+                        for u in users:
                             if u in acct_of:
                                 state["matched"] += 1
                                 seen_by_feed.add(acct_of[u])
@@ -368,7 +733,9 @@ async def main():
     state["coins"], state["coins_skipped"] = len(new), skipped
     logger.info("hl trades feed: %d coins (%d over the cap of %d), %d listed wallets",
                 len(new), skipped, MAX_SUBS, len(wallets))
-    tasks = [asyncio.create_task(ws_loop()), asyncio.create_task(write_loop()), asyncio.create_task(refresh_loop())]
+    tasks = [asyncio.create_task(ws_loop()), asyncio.create_task(write_loop()), asyncio.create_task(refresh_loop()),
+             asyncio.create_task(probe_loop()), asyncio.create_task(pos_loop()), asyncio.create_task(pos_sweep_loop()),
+             asyncio.create_task(watch_loop())]
     await refresh_accounts(wallets, with_subs=True)     # sub-accounts while the feed already runs
     tasks.append(asyncio.create_task(unseen_loop()))
     await asyncio.gather(*tasks)
