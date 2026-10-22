@@ -110,14 +110,14 @@ export default function AnalyticsAssetB() {
   const phone = usePhone();
   const setM = (patch: MatrixFilters) => setMatrix((m) => ({ ...m, ...patch }));
 
-  const assetsQ = useQuery({ queryKey: ['analytics-assets'], queryFn: getAnalyticsAssets, staleTime: 30_000 });
+  const assetsQ = useQuery({ queryKey: ['analytics-assets'], queryFn: getAnalyticsAssets, staleTime: 30_000, refetchInterval: 60_000 });
   const detailQ = useQuery({
     queryKey: ['analytics-asset', asset, top, includeMm, includeHedgers, minNotional, weighting === 'quality', matrix],
     queryFn: () => getAssetDetail(asset, { top, include_mm: includeMm, include_hedgers: includeHedgers, min_notional: minNotional, quality_weights: weighting === 'quality', ...matrix }),
     enabled: !!asset, staleTime: 30_000, refetchInterval: 60_000,
   });
-  const smiQ = useQuery({ queryKey: ['analytics-smi', asset], queryFn: () => getSmi(asset), enabled: !!asset, staleTime: 60_000 });
-  const flowsQ = useQuery({ queryKey: ['analytics-flows', asset, includeMm], queryFn: () => getFlows({ asset, window: '24h', limit: 30, include_mm: includeMm }), enabled: !!asset, staleTime: 30_000 });
+  const smiQ = useQuery({ queryKey: ['analytics-smi', asset], queryFn: () => getSmi(asset), enabled: !!asset, staleTime: 30_000, refetchInterval: 60_000 });
+  const flowsQ = useQuery({ queryKey: ['analytics-flows', asset, includeMm], queryFn: () => getFlows({ asset, window: '24h', limit: 30, include_mm: includeMm }), enabled: !!asset, staleTime: 30_000, refetchInterval: 60_000 });
 
   const d = detailQ.data;
   const pos = d?.positioning;
