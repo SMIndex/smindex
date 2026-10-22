@@ -782,7 +782,8 @@ async def _indexed_through_date() -> str | None:
         return _indexed_through[1]
     sf = get_session_factory()
     async with sf() as s:
-        m = (await s.execute(text("SELECT MAX(at) FROM perpl_events"))).scalar()
+        # newest block via ix_pe_block (MAX(at) scanned a whole index: 2 s at 0.9M rows)
+        m = (await s.execute(text("SELECT at FROM perpl_events ORDER BY block DESC LIMIT 1"))).scalar()
     _indexed_through = (time.time(), m.date().isoformat() if m else None)
     return _indexed_through[1]
 
