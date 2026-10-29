@@ -1265,6 +1265,16 @@ async def lifespan(app: FastAPI):
         from app.services.analytics import clustering as analytics_clustering
         analytics_clustering.start()
 
+    # Featured traders (docs/featured-traders): daily 02:00 UTC pipeline under
+    # the background budget, and the websocket push of new closed trips
+    try:
+        from app.services.featured import jobs as _fjobs, live as _flive
+        app.state.featured_stop = _aio_mm.Event()
+        _fjobs.start(app.state.featured_stop)
+        _flive.start(app.state.featured_stop)
+    except Exception as exc:
+        logger.warning("featured traders FAILED to start: %s", exc)
+
     # Warm the Perpl market registry once at boot (non-fatal): consumers that
     # read the cache directly (e.g. the analytics context endpoint's
     # Perpl-mapping, which must not fetch on the request path) otherwise see
@@ -1307,6 +1317,16 @@ async def lifespan(app: FastAPI):
     await _hl_px.stop()
     from app.services.hyperliquid import tracker as _hl_trk
     await _hl_trk.stop()
+
+    # Featured traders: daily job + live push
+    try:
+        if getattr(app.state, "featured_stop", None) is not None:
+            app.state.featured_stop.set()
+        from app.services.featured import jobs as _fjobs, live as _flive
+        await _fjobs.stop()
+        await _flive.stop_task()
+    except Exception as exc:
+        logger.warning("featured traders stop: %s", exc)
 
     # Stop Telegram bot
     if getattr(app.state, "strat_outbox_stop", None) is not None:
@@ -1423,6 +1443,17 @@ def create_app() -> FastAPI:
     # Wallet Explorer (Part 2): HL side; venue calls at explorer priority only
     from app.routers.explorer import router as explorer_router
     app.include_router(explorer_router, prefix="/api")
+
+    # Featured traders (docs/featured-traders): whitelist-gated data routes,
+    # open /preview and /whitelist/request, admin routes under /api/admin/featured
+    from app.routers.featured import router as featured_router, admin_router as featured_admin_router, Forbidden as _FeaturedForbidden
+    app.include_router(featured_router, prefix="/api")
+    app.include_router(featured_admin_router, prefix="/api")
+
+    @app.exception_handler(_FeaturedForbidden)
+    async def _featured_forbidden(request, exc):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"reason": "whitelist", "detail": "whitelist"})
 
     # Mount MCP server (Model Context Protocol. Claude Desktop / Code / Web).
     # Exposes /mcp/sse (SSE stream) and /mcp/messages (POST endpoint).

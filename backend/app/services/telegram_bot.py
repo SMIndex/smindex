@@ -49,6 +49,9 @@ async def start():
     app.add_handler(CommandHandler("status", _handle_status))
     app.add_handler(CommandHandler("help", _handle_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
+    # Featured traders whitelist: Approve / Reject buttons on the admin message
+    from telegram.ext import CallbackQueryHandler
+    app.add_handler(CallbackQueryHandler(_handle_featured_callback, pattern=r"^fwl:"))
 
     await app.initialize()
     await app.start()
@@ -80,15 +83,18 @@ async def _send_raw(chat_id: str, message: str, buttons: list | None = None):
     (the old behavior) hid every delivery failure forever.
 
     buttons: optional list of rows, each row a list of (text, url) tuples,
-    rendered as an inline keyboard. Link previews are always disabled so the
-    alert isn't dwarfed by a website preview card."""
+    rendered as an inline keyboard; a url of the form "cb:<data>" makes a
+    callback button instead (featured traders whitelist Approve / Reject).
+    Link previews are always disabled so the alert isn't dwarfed by a website
+    preview card."""
     if not _app:
         raise RuntimeError("telegram bot not running")
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
     reply_markup = None
     if buttons:
         reply_markup = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(text=t, url=u) for t, u in row] for row in buttons]
+            [[(InlineKeyboardButton(text=t, callback_data=u[3:]) if u.startswith("cb:") else InlineKeyboardButton(text=t, url=u))
+              for t, u in row] for row in buttons]
         )
     return await _app.bot.send_message(
         chat_id=int(chat_id), text=message, parse_mode="HTML",
@@ -414,6 +420,32 @@ async def _get_followers_with_telegram(leader_wallet: str, exchange: str = "perp
 
 
 # --- Handlers ---
+
+async def _handle_featured_callback(update, context):
+    """Approve / Reject button on a featured-traders whitelist request. The
+    decision runs through the same code as the admin API; only the configured
+    admin chat is accepted (whitelist.telegram_callback checks it)."""
+    q = update.callback_query
+    if q is None:
+        return
+    try:
+        from app.services.featured import whitelist as _fwl
+        chat_id = str(q.message.chat_id) if q.message else ""
+        actor = str(getattr(q.from_user, "username", None) or getattr(q.from_user, "id", ""))
+        result = await _fwl.telegram_callback(q.data or "", chat_id, actor)
+        await q.answer(result[:200])
+        if q.message and ("approved" in result or "rejected" in result):
+            try:
+                await q.edit_message_text((q.message.text_html or q.message.text or "") + f"\n\n<b>{result}</b>", parse_mode="HTML")
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.warning("featured whitelist callback failed: %s", exc)
+        try:
+            await q.answer("Failed, see the admin page.")
+        except Exception:
+            pass
+
 
 async def _handle_start(update, context):
     """Handle /start {link_code}: link Telegram to account."""

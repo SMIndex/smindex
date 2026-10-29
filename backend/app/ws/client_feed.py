@@ -20,6 +20,7 @@ SUPPORTED_CHANNELS = {
     "trades",
     "copy_updates",
     "sl_tp_triggered",
+    "featured.trades",
 }
 
 
@@ -198,6 +199,24 @@ async def client_feed_endpoint(websocket: WebSocket) -> None:
                         )
                     )
                     continue
+
+                # featured.trades: whitelisted or admin wallets only (same gate as the API)
+                if channel == "featured.trades":
+                    allowed = False
+                    if user_id:
+                        try:
+                            from app.services.featured import whitelist as _fwl
+                            from app.db.database import get_session_factory as _gsf
+                            from app.db.models import User as _User
+                            from sqlalchemy import select as _select
+                            async with _gsf()() as _s:
+                                _u = (await _s.execute(_select(_User).where(_User.id == int(user_id)))).scalar_one_or_none()
+                            allowed = bool(_u) and await _fwl.is_allowed(_u.wallet_address)
+                        except Exception:
+                            allowed = False
+                    if not allowed:
+                        await websocket.send_text(json.dumps({"error": "whitelist", "channel": channel}))
+                        continue
 
                 market_id = msg.get("market_id")
                 if channel not in conn.subscriptions:
