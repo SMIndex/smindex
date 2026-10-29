@@ -113,9 +113,10 @@ async def _latest_rows() -> dict:
         coin_stats = json.loads(r[49]) if r[49] else []
         top = json.loads(r[48]) if r[48] else []
         on_perpl = sum(1 for c in coin_stats if c.get("coin") in top and c.get("on_perpl"))
-        live_last = r[58]
+        # columns 0..58 are featured_wallets (58 = computed_at), 59..65 are featured_live
+        live_last = r[59]
         last_ms = max([m for m in (_ms(r[57]), _ms(live_last)) if m], default=None)
-        live_av = _fl(r[62])
+        live_av = _fl(r[63])
         out.append({
             "as_of": r[0].isoformat(), "venue": r[1], "wallet": r[2], "label": r[3], "qualified": bool(r[4]), "inactive": bool(r[5]),
             "one_big_win": bool(r[6]), "score": _fl(r[7]), "verdict": r[8], "style": r[9], "display_name": r[10],
@@ -131,10 +132,10 @@ async def _latest_rows() -> dict:
             "account_value": (live_av if live_av is not None else _fl(r[46])), "volume_90d": _fl(r[47]),
             "top_coins": top, "top_coins_on_perpl": on_perpl, "coin_stats": coin_stats, "hours_utc": (json.loads(r[50]) if r[50] else [0] * 24),
             "copiable_pct": _fl(r[51]), "liquidations_90d": r[52], "usual_open": r[53], "history_from": _iso(r[54]),
-            "flags": flags, "score_inputs": (json.loads(r[56]) if r[56] else {}), "computed_at": _iso(r[57]),
+            "flags": flags, "score_inputs": (json.loads(r[56]) if r[56] else {}), "computed_at": _iso(r[58]),
             "last_trade_at": (rt.ms_to_dt(last_ms).isoformat(timespec="seconds") if last_ms else None), "last_trade_ms": last_ms,
-            "open_positions": (json.loads(r[59]) if r[59] else []), "open_count": int(r[60] or 0), "unrealized_usd": _fl(r[61]),
-            "positions_at": _iso(r[63]), "live_updated_at": _iso(r[64]),
+            "open_positions": (json.loads(r[60]) if r[60] else []), "open_count": int(r[61] or 0), "unrealized_usd": _fl(r[62]),
+            "positions_at": _iso(r[64]), "live_updated_at": _iso(r[65]),
             "streak_now": extra.get("streak_now"), "confidence": extra.get("confidence"), "weekly": extra.get("weekly"),
             "averages_down_n": extra.get("averages_down_n"), "adds_to_winner_n": extra.get("adds_to_winner_n"),
             "momentum": {"win_rate": _momentum(_fl(r[14]), _fl(r[13])), "pf": _momentum(_fl(r[19]), _fl(r[18])),
