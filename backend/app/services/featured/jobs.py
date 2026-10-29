@@ -280,7 +280,10 @@ async def candidates(run: Run) -> list[dict]:
     # order: previously featured first, then wallets whose 7-day fill stats look
     # like a trader's, then the rest; by month pnl inside each group. The daily
     # weight cap decides how far down the list a day gets.
-    kept.sort(key=lambda c: (0 if "featured" in c["source"] else (1 if c["wallet"] in promising else 2), -(c["month_pnl"] or 0.0)))
+    # inside the promising group the smallest month volume first: those cost
+    # the fewest fill pages and are the ones a copier can follow
+    kept.sort(key=lambda c: (0 if "featured" in c["source"] else (1 if c["wallet"] in promising else 2),
+                             (c["month_vlm"] or 1e18) if c["wallet"] in promising else -(c["month_pnl"] or 0.0)))
     run.notes.append(f"promising {sum(1 for c in kept if c['wallet'] in promising)}")
     run.notes.append(f"candidates {len(out)}, prefilter {len(kept)}")
     logger.info("featured candidates: %d from %d sources, %d pass the pre-filter",
