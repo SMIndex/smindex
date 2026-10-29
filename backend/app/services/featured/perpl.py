@@ -73,6 +73,13 @@ async def build_for_address(address: str, dec: dict[int, tuple[int, int, str]]) 
         rows = (await s.execute(q, {"a": accts, "e": list(POSITION_EVENTS + FILL_EVENTS + ("AccountCreated",))})).all()
     if not rows:
         return {"trips": [], "complete": False, "first_event_at": None, "n_events": 0}
+    import asyncio
+    return await asyncio.to_thread(_build_rows, address, rows, dec)
+
+
+def _build_rows(address: str, rows: list, dec: dict[int, tuple[int, int, str]]) -> dict:
+    """Pure part of build_for_address (runs in a worker thread: json of
+    thousands of events stalled the event loop for 5 s on 2026-10-29)."""
     first_at = rows[0][0]
     complete = rows[0][6] == "AccountCreated"
     # fees of the fills in a tx, per (account, perp)

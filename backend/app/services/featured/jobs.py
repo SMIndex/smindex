@@ -145,9 +145,17 @@ async def _stream_leaderboard_file(run: Run) -> dict[str, dict]:
             if resp.status_code != 200:
                 run.notes.append(f"leaderboard file {resp.status_code}")
                 return out
+            # the file is ~34 MB: write it off the event loop in 4 MB pieces
+            # (a plain fh.write loop stalled the loop for 2 s on 2026-10-29)
+            buf = bytearray()
             with open(path, "wb") as fh:
                 async for chunk in resp.aiter_bytes():
-                    fh.write(chunk)
+                    buf += chunk
+                    if len(buf) >= 4 * 1024 * 1024:
+                        await asyncio.to_thread(fh.write, bytes(buf))
+                        buf = bytearray()
+                if buf:
+                    await asyncio.to_thread(fh.write, bytes(buf))
 
         def parse() -> dict[str, dict]:
             res: dict[str, dict] = {}
@@ -237,6 +245,8 @@ async def candidates(run: Run) -> list[dict]:
             reason = "30d pnl under 500"
         elif fr and (fr.get("month_vlm") or 0) <= 0:
             reason = "no volume"            # pnl with no trading: a vault or deposit artifact
+        elif fr and fr["month_pnl"] / fr["month_vlm"] < 0.0005:
+            reason = "pnl per volume under 0.05%"   # the farmer / market-maker rule on the leaderboard numbers
         out.append({"wallet": w, "source": ",".join(sorted(sources))[:64], "prefilter": reason is None,
                     "reason": reason, **{k: fr.get(k) for k in ("month_pnl", "month_vlm", "account_value", "display_name")}})
     async with sf() as s:
@@ -590,7 +600,7 @@ async def rebuild_trips(wallet: str, accounts: list[str]) -> dict:
     to round_trips. Returns build_trips' result."""
     since = int(time.time() * 1000) - FILLS_RETENTION_DAYS * rt.DAY_MS
     fills, funding = await _load_fills(accounts, since)
-    res = rt.build_trips(fills, funding)
+    res = await asyncio.to_thread(rt.build_trips, fills, funding)     # thousands of fills: off the loop
     await _leverage_hints(wallet, res["trips"])
     await write_trips("hl", wallet, res["trips"])
     return res
@@ -696,9 +706,9 @@ async def process_wallet(run: Run, cand: dict, coins: set[str], budget_left: int
     ctx = await _context(wallet, accounts)
     hist_ms = rt.dt_to_ms(ident["history_from"]) if ident.get("history_from") else None
     pf = ident.get("portfolio") or {}
-    m = rt.compute_metrics(trips, now_ms=now_ms, equity_avg=pf.get("avg_equity_90d"), account_value=pf.get("account_value"),
-                           perpl_coins=coins, identity_role=ident.get("role"), history_from_ms=hist_ms,
-                           net_pnl_all=pf.get("net_pnl_all"), **ctx)
+    m = await asyncio.to_thread(rt.compute_metrics, trips, now_ms=now_ms, equity_avg=pf.get("avg_equity_90d"),
+                                account_value=pf.get("account_value"), perpl_coins=coins, identity_role=ident.get("role"),
+                                history_from_ms=hist_ms, net_pnl_all=pf.get("net_pnl_all"), **ctx)
     needs_venue = ["sample", "label", "mm", "farmer", "bot", "hedger", "wash", "liquidations"]
     lite_pass = all(m["flags"][k]["pass"] is not False for k in needs_venue) and m["net_pnl_90d"] > rt.RULES["min_profit_usd"]
     # 3. identity + portfolio only for wallets worth the weight
@@ -715,9 +725,9 @@ async def process_wallet(run: Run, cand: dict, coins: set[str], budget_left: int
                 built = await rebuild_trips(wallet, accounts)
                 trips = built["trips"]
             ctx = await _context(wallet, accounts)
-        m = rt.compute_metrics(trips, now_ms=now_ms, equity_avg=pf.get("avg_equity_90d"), account_value=pf.get("account_value"),
-                               perpl_coins=coins, identity_role=ident.get("role"), history_from_ms=hist_ms,
-                               net_pnl_all=pf.get("net_pnl_all"), **ctx)
+        m = await asyncio.to_thread(rt.compute_metrics, trips, now_ms=now_ms, equity_avg=pf.get("avg_equity_90d"),
+                                    account_value=pf.get("account_value"), perpl_coins=coins, identity_role=ident.get("role"),
+                                    history_from_ms=hist_ms, net_pnl_all=pf.get("net_pnl_all"), **ctx)
         if ident.get("role") in ("agent", "subAccount") and ident.get("master"):
             m["flags"]["role"]["value"] = f"{ident['role']} of {ident['master'][:10]}"
     else:

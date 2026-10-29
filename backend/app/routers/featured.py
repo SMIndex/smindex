@@ -58,7 +58,9 @@ def _iso(dt) -> str | None:
         return None
     if isinstance(dt, str):
         return dt
-    return dt.isoformat(timespec="seconds")
+    if isinstance(dt, datetime):
+        return dt.isoformat(timespec="seconds")
+    return dt.isoformat()          # date
 
 
 def _ms(dt) -> int | None:
@@ -129,7 +131,7 @@ async def _latest_rows() -> dict:
             "account_value": (live_av if live_av is not None else _fl(r[46])), "volume_90d": _fl(r[47]),
             "top_coins": top, "top_coins_on_perpl": on_perpl, "coin_stats": coin_stats, "hours_utc": (json.loads(r[50]) if r[50] else [0] * 24),
             "copiable_pct": _fl(r[51]), "liquidations_90d": r[52], "usual_open": r[53], "history_from": _iso(r[54]),
-            "flags": flags, "score_inputs": (json.loads(r[56]) if r[56] else {}), "computed_at": _iso(r[57 + 1 - 1]) and _iso(r[58 - 1]),
+            "flags": flags, "score_inputs": (json.loads(r[56]) if r[56] else {}), "computed_at": _iso(r[57]),
             "last_trade_at": (rt.ms_to_dt(last_ms).isoformat(timespec="seconds") if last_ms else None), "last_trade_ms": last_ms,
             "open_positions": (json.loads(r[59]) if r[59] else []), "open_count": int(r[60] or 0), "unrealized_usd": _fl(r[61]),
             "positions_at": _iso(r[63]), "live_updated_at": _iso(r[64]),
@@ -139,8 +141,6 @@ async def _latest_rows() -> dict:
                          "pnl": _momentum(_fl(r[16]), (_fl(r[15]) or 0) / 3.0)},
             "active": bool(last_ms and now_ms - last_ms <= ACTIVE_MS["14d"]),
         })
-    for o in out:
-        o["computed_at"] = None
     return {"rows": out, "built_at": datetime.utcnow().isoformat(timespec="seconds")}
 
 
