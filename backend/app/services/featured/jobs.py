@@ -262,6 +262,8 @@ async def candidates(run: Run) -> list[dict]:
             reason = "no volume"            # pnl with no trading: a vault or deposit artifact
         elif fr and fr["month_pnl"] / fr["month_vlm"] < 0.0005:
             reason = "pnl per volume under 0.05%"   # the farmer / market-maker rule on the leaderboard numbers
+        elif fr and fr["month_pnl"] / fr["month_vlm"] > 0.25:
+            reason = "pnl above 25% of volume"      # the leaderboard ingest's own artifact guard (vault / deposit rows)
         out.append({"wallet": w, "source": ",".join(sorted(sources))[:64], "prefilter": reason is None,
                     "reason": reason, **{k: fr.get(k) for k in ("month_pnl", "month_vlm", "account_value", "display_name")}})
     async with sf() as s:

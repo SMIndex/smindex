@@ -186,6 +186,7 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
         trip: dict | None = None
         pos_known = False
         pos = 0.0
+        seen_flat = False          # a trip starts only after the coin has been flat once inside the stored history
         for f in cf:
             start = f["start_position"]
             if pos_known and abs(start - pos) > max(1e-6, abs(pos) * 1e-6):
@@ -198,6 +199,8 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
             end = start + delta
             if abs(end) < EPS:
                 end = 0.0
+            if not seen_flat and abs(start) < EPS:
+                seen_flat = True
             close_qty = 0.0
             if abs(start) > EPS and (start > 0) != (delta > 0):
                 close_qty = min(abs(start), abs(delta))
@@ -211,11 +214,15 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
                     if trip is not None:
                         trips.append(_finish(trip, f["time"]))
                     trip = None
+                    seen_flat = True
             if open_qty > EPS:
                 side = "long" if end > 0 else "short"
-                if trip is None:
-                    trip = _new_trip(coin, side, f["time"])
-                _apply_part(trip, f, open_qty, opening=True)
+                if trip is None and not seen_flat:
+                    skipped_pre += 1        # adds to a position opened before the stored history
+                else:
+                    if trip is None:
+                        trip = _new_trip(coin, side, f["time"])
+                    _apply_part(trip, f, open_qty, opening=True)
             if trip is not None:
                 trip["max_size"] = max(trip["max_size"], abs(end))
                 trip["max_size_usd"] = max(trip["max_size_usd"], abs(end) * f["px"])

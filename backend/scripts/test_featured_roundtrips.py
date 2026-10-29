@@ -143,6 +143,20 @@ check("stop at 5% hits (mae 6.17%)", (r2["stopped_out"], r2["pnl"]), (1, round(-
 r3 = replay([t1], margin_usd=50, leverage=3, stop_pct=None, perpl_coins=set(), now_ms=6000)
 check("coin not on Perpl is skipped", (r3["skipped"], r3["trades"]), (1, 0))
 
+print("adds to a position opened before the history")
+pre = [fill(100, "ZEC", "A", 1, 800, -544.0, fee=0.1), fill(200, "ZEC", "A", 1, 801, -545.0, fee=0.1),
+       fill(300, "ZEC", "B", 546, 790, -546.0, pnl=5000.0, fee=5.0),          # flat: the whole short closes
+       fill(400, "ZEC", "B", 2, 795, 0.0, fee=0.2), fill(500, "ZEC", "A", 2, 799, 2.0, pnl=8.0, fee=0.2)]
+o2 = build_trips(pre)
+check("no trip from the pre-history adds and close", len(o2["trips"]), 1)
+check("they are counted as skipped", o2["skipped_pre"], 3)
+check("the first complete trip starts from flat", (o2["trips"][0]["open_time"], o2["trips"][0]["side"], o2["trips"][0]["pnl_usd"]), (400, "long", 8.0 - 0.4))
+pre2 = [fill(100, "BTC", "A", 1, 100, 5.0, fee=0.1), fill(200, "BTC", "A", 7, 100, 4.0, pnl=-10.0, fee=0.7),   # flip from a pre-history long into a short 3
+        fill(300, "BTC", "B", 3, 90, -3.0, pnl=30.0, fee=0.3)]
+o3 = build_trips(pre2)
+check("a flip out of a pre-history position opens a clean trip", (len(o3["trips"]), o3["trips"][0]["side"], o3["trips"][0]["entry_qty"]), (1, "short", 3.0))
+check("flip: the closed pre-history part is skipped", o3["skipped_pre"], 2)
+
 n = sum(1 for c in checks if not c)
 print(f"\n{len(checks) - n} passed, {n} failed")
 sys.exit(1 if n else 0)
