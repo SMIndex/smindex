@@ -329,7 +329,6 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
     last_time = cursor
     sf = get_session_factory()
     total = 0
-    fill_rate_stop = False
     while pages < PAGES_MAX:
         body = await hl_post(run, {"type": "userFillsByTime", "user": account, "startTime": start,
                                    "endTime": now_ms, "aggregateByTime": True})
@@ -360,16 +359,14 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
             last_time = max(last_time or 0, max(times))
         if len(body) < 2000:
             break
-        if first and pages == 1 and earliest and last_time and (last_time - earliest) < 10 * rt.DAY_MS:
-            # 2,000 fills inside 10 days is over 200 fills a day: the bot rule
-            # (100 round trips a day) cannot pass, so the other 4 pages (about
-            # 480 weight) are not read. The stored span is marked as the history.
-            fill_rate_stop = True
-            break
+        # No early stop on a dense first page (tried 2026-10-29: a trader with one
+        # 76-minute burst of 2,000 small fills lost 7 weeks of trades). The
+        # venue serves the oldest 2,000 of its 10,000-fill window first, so the
+        # 5-page cap always reaches the present.
         start = int(body[-1]["time"]) + 1
     history_from_ms = None
-    if first and (total >= 10_000 or fill_rate_stop) and earliest:
-        history_from_ms = earliest       # the venue's 10,000-fill window (or the fill-rate stop) cut the history here
+    if first and total >= 10_000 and earliest:
+        history_from_ms = earliest       # the venue's 10,000-fill window cut the history here
     cols = {"fills_checked_at": datetime.utcnow()}
     if last_time:
         cols["fills_cursor_ms"] = int(last_time)
