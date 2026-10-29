@@ -829,7 +829,7 @@ async def featured_close_trip(w: str, coin: str, flat_ms: int) -> None:
             for f in fills or []:
                 if f.get("tid") is None:
                     continue
-                n = rt.norm_fill(f)
+                n = rt.norm_fill(f, acct)
                 newest = max(newest or 0, n["time"])
                 rows.append({"w": acct, "tid": n["tid"], "t": rt.ms_to_dt(n["time"]), "coin": n["coin"], "dir": n["dir"][:24],
                              "side": n["side"][:1] or "B", "px": n["px"], "sz": n["sz"], "pnl": n["closed_pnl"], "fee": n["fee"],

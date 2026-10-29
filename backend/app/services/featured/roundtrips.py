@@ -71,6 +71,12 @@ def norm_fill(f: dict, account: str | None = None) -> dict:
     """One Hyperliquid fill (userFillsByTime shape, or an hl_fills row with the
     same keys) to the internal shape."""
     liq = f.get("liquidation")
+    acct = (account or f.get("account") or "").lower()
+    if isinstance(liq, dict):
+        # the venue stamps BOTH sides of a liquidation; only the liquidated
+        # account counts as liquidated (the other side merely filled it)
+        who = str(liq.get("liquidatedUser") or "").lower()
+        liq = (who == acct) if (acct and who) else bool(liq)
     return {
         "time": int(f.get("time") or f.get("time_ms") or 0),
         "coin": str(f.get("coin") or ""),
@@ -85,8 +91,8 @@ def norm_fill(f: dict, account: str | None = None) -> dict:
         "tid": int(f.get("tid") or 0),
         "oid": (int(f["oid"]) if f.get("oid") is not None else None),
         "hash": f.get("hash"),
-        "liquidation": bool(liq) if not isinstance(liq, (int, bool)) else bool(liq),
-        "account": (account or f.get("account") or "").lower() or None,
+        "liquidation": bool(liq),
+        "account": acct or None,
     }
 
 

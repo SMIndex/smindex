@@ -24,10 +24,13 @@ def check(name, got, want, tol=1e-6):
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}: got {got!r} want {want!r}")
 
 
-def fill(t, coin, side, sz, px, start, pnl=0.0, fee=0.0, crossed=True, liq=False, tid=None):
+ME = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+def fill(t, coin, side, sz, px, start, pnl=0.0, fee=0.0, crossed=True, liq=False, tid=None, liq_other=False):
     return {"time": t, "coin": coin, "side": side, "sz": sz, "px": px, "startPosition": start,
-            "closedPnl": pnl, "fee": fee, "crossed": crossed, "tid": tid or t,
-            "dir": "", "liquidation": ({"liquidatedUser": "0x1"} if liq else None)}
+            "closedPnl": pnl, "fee": fee, "crossed": crossed, "tid": tid or t, "account": ME,
+            "dir": "", "liquidation": ({"liquidatedUser": ("0x1" if liq_other else ME)} if (liq or liq_other) else None)}
 
 
 F = []
@@ -156,6 +159,12 @@ pre2 = [fill(100, "BTC", "A", 1, 100, 5.0, fee=0.1), fill(200, "BTC", "A", 7, 10
 o3 = build_trips(pre2)
 check("a flip out of a pre-history position opens a clean trip", (len(o3["trips"]), o3["trips"][0]["side"], o3["trips"][0]["entry_qty"]), (1, "short", 3.0))
 check("flip: the closed pre-history part is skipped", o3["skipped_pre"], 2)
+
+print("liquidation stamps")
+o4 = build_trips([fill(100, "SOL", "B", 1, 50, 0.0), fill(200, "SOL", "A", 1, 49, 1.0, pnl=-1.0, liq_other=True),
+                  fill(300, "SOL", "B", 1, 50, 0.0), fill(400, "SOL", "A", 1, 40, 1.0, pnl=-10.0, liq=True)])
+check("filling someone else's liquidation is not a liquidation", o4["trips"][0]["liquidation"], False)
+check("being the liquidated user is", o4["trips"][1]["liquidation"], True)
 
 n = sum(1 for c in checks if not c)
 print(f"\n{len(checks) - n} passed, {n} failed")

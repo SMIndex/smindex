@@ -362,7 +362,7 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
         if batch:
             rows = []
             for f in batch:
-                n = rt.norm_fill(f)
+                n = rt.norm_fill(f, account)
                 rows.append({"w": account, "tid": n["tid"], "t": rt.ms_to_dt(n["time"]), "coin": n["coin"], "dir": n["dir"][:24],
                              "side": n["side"][:1] or "B", "px": n["px"], "sz": n["sz"], "pnl": n["closed_pnl"], "fee": n["fee"],
                              "ft": (f.get("feeToken") or None), "cr": (None if n["crossed"] is None else int(n["crossed"])),
