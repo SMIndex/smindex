@@ -209,6 +209,7 @@ export default function DiscoverB() {
   const sourceLabel = exchInfo?.label ?? (exchange === 'hl' ? 'Hyperliquid' : 'Perpl');
   const TABS = [
     { key: 'discover', label: 'Discover', to: '/copy/discover' },
+    { key: 'featured', label: 'Featured traders', to: '/copy/featured/wallets' },
     { key: 'watchlist', label: 'Watchlist', to: '/copy/watchlist' },
     { key: 'dashboard', label: 'Dashboard', to: '/copy/dashboard' },
     { key: 'portfolio', label: 'Portfolio', to: '/copy/portfolio' },

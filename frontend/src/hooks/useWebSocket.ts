@@ -58,6 +58,9 @@ function dispatchMessage(data: any) {
     case 'social_feed':
       if (data.data) window.dispatchEvent(new CustomEvent('social_feed', { detail: data.data }));
       break;
+    case 'featured.trades':
+      if (data.data) window.dispatchEvent(new CustomEvent('featured_trade', { detail: data.data }));
+      break;
     case 'sl_tp_triggered':
       if (data.data) {
         window.dispatchEvent(new CustomEvent('sl_tp_triggered', { detail: data.data }));

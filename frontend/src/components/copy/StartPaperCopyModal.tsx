@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import Modal from '@/components/common/Modal';
 import { COPY_LIVE_ENABLED } from '@/config/constants';
@@ -14,6 +14,12 @@ interface Props {
   traderName?: string | null;
   exchange?: string;   // signal source ('perpl' default | 'hl'); execution stays Perpl
   onSubmit: (payload: CreateSubscriptionPayload) => Promise<CopySubscription>;
+  // Featured traders (2026-10-29): decision helpers rendered above the fields
+  // and suggested defaults prefilled. Presentation only; the payload and the
+  // submit path are unchanged.
+  extra?: ReactNode;
+  defaults?: Partial<Pick<FormState, 'allocation_usd' | 'max_leverage' | 'max_margin_per_trade' | 'max_daily_loss' | 'max_total_loss'>>;
+  title?: string;
 }
 
 interface FormState {
@@ -45,7 +51,7 @@ function num(v: string): number {
   return Number.isFinite(n) ? n : NaN;
 }
 
-export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, traderName, onSubmit, exchange }: Props) {
+export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, traderName, onSubmit, exchange, extra, defaults, title }: Props) {
   const { activeMarkets, loading: marketsLoading, error: marketsError } = useMarkets();
   const [form, setForm] = useState<FormState>(DEFAULTS);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -65,6 +71,11 @@ export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, tra
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  // Suggested defaults from the Featured traders sheet follow the helpers above the form.
+  useEffect(() => {
+    if (defaults) setForm((f) => ({ ...f, ...defaults }));
+  }, [defaults?.allocation_usd, defaults?.max_leverage, defaults?.max_margin_per_trade, defaults?.max_daily_loss, defaults?.max_total_loss]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleMarket = (id: number) =>
     setForm((f) => ({
@@ -164,8 +175,9 @@ export default function StartPaperCopyModal({ isOpen, onClose, traderWallet, tra
   );
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Set up Copy" maxWidth="max-w-lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={title ?? "Set up Copy"} maxWidth="max-w-lg">
       <div className="space-y-4">
+        {extra}
         {/* Trader + live notice */}
         <div className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg bg-bg-secondary/60 border border-text-secondary/10">
           <div>

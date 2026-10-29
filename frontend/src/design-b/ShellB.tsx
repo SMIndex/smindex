@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { Fragment, type ReactNode, useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import WalletButton from '@/components/auth/WalletButton';
 import ExplorerSearch from './ExplorerSearch';
@@ -78,7 +78,13 @@ export default function ShellB({ children }: { children: ReactNode }) {
           <div style={{ padding: '4px 0 8px' }}><ExplorerSearch compact /></div>
           <div className="label">Trading</div>
           {NAV.slice(0, 3).map((n) => (
-            <button key={n.to} className="navb" aria-selected={isActive(n)} onClick={() => navigate(n.to)}>{n.icon}{n.label}</button>
+            <Fragment key={n.to}>
+              <button className="navb" aria-selected={isActive(n) && !(n.to === '/copy/discover' && location.pathname.startsWith('/copy/featured'))} onClick={() => navigate(n.to)}>{n.icon}{n.label}</button>
+              {n.to === '/copy/discover' && (
+                <button className="navb" style={{ paddingLeft: 38, fontSize: 13 }} aria-selected={location.pathname.startsWith('/copy/featured')}
+                        onClick={() => navigate('/copy/featured/wallets')}>Featured traders</button>
+              )}
+            </Fragment>
           ))}
           <div className="label">Markets</div>
           {NAV.slice(3, 5).map((n) => (

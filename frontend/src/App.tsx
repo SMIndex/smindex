@@ -56,6 +56,8 @@ const TerminalB = lazy(() => import('@/design-b/screens/TerminalB'));
 const StrategiesOverviewB = lazy(() => import('@/design-b/screens/StrategiesOverviewB'));
 const StrategyDetailB = lazy(() => import('@/design-b/screens/StrategyDetailB'));
 const WalletExplorerB = lazy(() => import('@/design-b/screens/WalletExplorerB'));
+const FeaturedB = lazy(() => import('@/design-b/screens/featured/FeaturedB'));
+const FeaturedAdminB = lazy(() => import('@/design-b/screens/featured/FeaturedAdminB'));
 const TermsB = lazy(() => import('@/design-b/screens/LegalB').then((m) => ({ default: m.TermsB })));
 const PrivacyB = lazy(() => import('@/design-b/screens/LegalB').then((m) => ({ default: m.PrivacyB })));
 const FeedbackB = lazy(() => import('@/design-b/screens/LegalB').then((m) => ({ default: m.FeedbackB })));
@@ -172,6 +174,10 @@ function App() {
                   {/* Copy Trading v1: paper-only social copy */}
                   <Route path="/copy" element={<Navigate to="/copy/discover" replace />} />
                   <Route path="/copy/discover" element={<DesignScreen a={CopyDiscoverPage} b={DiscoverB} />} />
+                  <Route path="/copy/featured" element={<Navigate to="/copy/featured/wallets" replace />} />
+                  <Route path="/copy/featured/wallets" element={<FeaturedB />} />
+                  <Route path="/copy/featured/trades" element={<FeaturedB />} />
+                  <Route path="/admin/featured-whitelist" element={<FeaturedAdminB />} />
                   <Route path="/copy/watchlist" element={<CopyWatchlistPage />} />
                   <Route path="/copy/dashboard" element={<CopyDashboardPage />} />
                   <Route path="/copy/trader/:wallet" element={<DesignScreen a={CopyTraderProfilePage} b={TraderProfileB} />} />
