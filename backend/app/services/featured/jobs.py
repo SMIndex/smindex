@@ -75,6 +75,16 @@ class Run:
             self.id = r.lastrowid
             await s.commit()
 
+    async def flush(self) -> None:
+        """Write the counters so far (a restart mid-run keeps its weight in the ledger)."""
+        if self.id is None:
+            return
+        sf = get_session_factory()
+        async with sf() as s:
+            await s.execute(text("UPDATE featured_job_runs SET requests=:r, weight=:w, notes=:n WHERE id=:i"),
+                            {"r": self.requests, "w": self.weight, "n": "; ".join(self.notes)[-255:] or None, "i": self.id})
+            await s.commit()
+
     async def close(self, ok: bool, note: str | None = None) -> None:
         if note:
             self.notes.append(note)
@@ -317,6 +327,7 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
     last_time = cursor
     sf = get_session_factory()
     total = 0
+    fill_rate_stop = False
     while pages < PAGES_MAX:
         body = await hl_post(run, {"type": "userFillsByTime", "user": account, "startTime": start,
                                    "endTime": now_ms, "aggregateByTime": True})
@@ -347,10 +358,16 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
             last_time = max(last_time or 0, max(times))
         if len(body) < 2000:
             break
+        if first and pages == 1 and earliest and last_time and (last_time - earliest) < 10 * rt.DAY_MS:
+            # 2,000 fills inside 10 days is over 200 fills a day: the bot rule
+            # (100 round trips a day) cannot pass, so the other 4 pages (about
+            # 480 weight) are not read. The stored span is marked as the history.
+            fill_rate_stop = True
+            break
         start = int(body[-1]["time"]) + 1
     history_from_ms = None
-    if first and total >= 10_000 and earliest:
-        history_from_ms = earliest       # the venue's 10,000-fill window cut the history here
+    if first and (total >= 10_000 or fill_rate_stop) and earliest:
+        history_from_ms = earliest       # the venue's 10,000-fill window (or the fill-rate stop) cut the history here
     cols = {"fills_checked_at": datetime.utcnow()}
     if last_time:
         cols["fills_cursor_ms"] = int(last_time)
@@ -885,9 +902,15 @@ async def run_daily(max_wallets: int | None = None) -> dict:
                 m = await process_wallet(run, c, coins, budget_left)
                 done += 1
                 qualified += 1 if (m["qualified"] and not m["inactive"]) else 0
+                if m["qualified"]:
+                    logger.info("featured: %s qualified (%s, score %.0f, %d trips)", c["wallet"][:10], m["label"], m["score"], m["trades_90d"])
             except Exception as exc:
                 logger.warning("featured: wallet %s failed: %s", c["wallet"][:10], exc)
                 run.notes.append(f"{c['wallet'][:8]} failed")
+            try:
+                await run.flush()
+            except Exception:
+                pass
             if _stop is not None and _stop.is_set():
                 run.notes.append("stopped")
                 break
