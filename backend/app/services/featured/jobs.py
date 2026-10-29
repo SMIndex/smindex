@@ -39,8 +39,10 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 RUN_AT_UTC = (2, 0)                      # 02:00 UTC, after the hourly leaderboard ingest
-FEATURED_WPM = 60.0                      # 5 % of 1,200
+FEATURED_WPM = 60.0                      # 5 % of 1,200: the daily incremental runs
+FIRST_PASS_WPM = 300.0                   # 25 % of 1,200: the first pass only (owner, 2026-10-29)
 DAILY_WEIGHT_CAP = int(os.environ.get("FEATURED_DAILY_WEIGHT_CAP", "28000"))
+_wpm = FEATURED_WPM                      # pace of the run in progress
 CANDLE_WEIGHT_CAP = 3000                 # of the daily cap, for trip excursions
 FILE_CANDIDATE_CAP = 2000
 FIRST_WINDOW_DAYS = 90
@@ -133,7 +135,7 @@ async def hl_post(run: Run, payload: dict, *, timeout: float = 30.0):
     run.weight += w
     _pause_mult = max(1.0, _pause_mult * 0.9)
     # pacing: FEATURED_WPM weight per minute -> sleep weight / WPM minutes
-    await asyncio.sleep(60.0 * w / FEATURED_WPM * _pause_mult)
+    await asyncio.sleep(60.0 * w / _wpm * _pause_mult)
     return body
 
 
@@ -236,9 +238,24 @@ async def candidates(run: Run) -> list[dict]:
             "SELECT wallet, role, master FROM wallet_identity"))).all()}
         # the hourly fill sampler's 7-day stats (about 1,250 wallets): a cheap
         # read on who trades like a trader, used only to ORDER the day's work
-        promising = set((await s.execute(text(
-            "SELECT LOWER(wallet_address) FROM trader_fill_stats WHERE trades_7d BETWEEN 3 AND 400 "
-            "AND (maker_ratio IS NULL OR maker_ratio < 0.6) AND (win_rate_7d IS NULL OR win_rate_7d >= 0.45)"))).scalars().all())
+        # 7-day fill stats (hourly sampler, about 1,250 wallets): 3 to 150 fills a
+        # week is 30 to 2,000 fills over 90 days, the size of record a copier can follow
+        fs = {w: (int(n or 0), (float(mr) if mr is not None else None)) for w, n, mr in (await s.execute(text(
+            "SELECT LOWER(wallet_address), trades_7d, maker_ratio FROM trader_fill_stats"))).all()}
+        promising = {w for w, (n, mr) in fs.items() if 3 <= n <= 150 and (mr is None or mr < 0.6)}
+        # newest trade we already know (trades feed, tracker, leaderboard activity):
+        # a wallet whose last known trade is older than 14 days fails "recent"
+        # before any fill is read. Unknown = not skipped.
+        last_seen: dict[str, float] = {}
+        for w, ms in (await s.execute(text("SELECT LOWER(wallet), last_trade_ms FROM hl_last_active"))).all():
+            last_seen[w] = max(last_seen.get(w, 0), float(ms or 0))
+        for w, dt in (await s.execute(text(
+            "SELECT LOWER(wallet_address), last_fill_at FROM trader_profiles WHERE exchange='hl' AND last_fill_at IS NOT NULL"))).all():
+            last_seen[w] = max(last_seen.get(w, 0), dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        for w, ms in (await s.execute(text(
+            "SELECT LOWER(wallet_address), MAX(ts_ms) FROM hl_fill_events GROUP BY wallet_address"))).all():
+            last_seen[w] = max(last_seen.get(w, 0), float(ms or 0))
+        stale_cut = time.time() * 1000 - 14 * rt.DAY_MS
     # cohort flags (in-process, from the analytics sweep)
     try:
         from app.services.analytics import cohort
@@ -264,6 +281,8 @@ async def candidates(run: Run) -> list[dict]:
             reason = "pnl per volume under 0.05%"   # the farmer / market-maker rule on the leaderboard numbers
         elif fr and fr["month_pnl"] / fr["month_vlm"] > 0.25:
             reason = "pnl above 25% of volume"      # the leaderboard ingest's own artifact guard (vault / deposit rows)
+        elif last_seen.get(w) and last_seen[w] < stale_cut and "featured" not in sources:
+            reason = "no trade in 14 days"
         out.append({"wallet": w, "source": ",".join(sorted(sources))[:64], "prefilter": reason is None,
                     "reason": reason, **{k: fr.get(k) for k in ("month_pnl", "month_vlm", "account_value", "display_name")}})
     async with sf() as s:
@@ -283,7 +302,7 @@ async def candidates(run: Run) -> list[dict]:
     # inside the promising group the smallest month volume first: those cost
     # the fewest fill pages and are the ones a copier can follow
     kept.sort(key=lambda c: (0 if "featured" in c["source"] else (1 if c["wallet"] in promising else 2),
-                             (c["month_vlm"] or 1e18) if c["wallet"] in promising else -(c["month_pnl"] or 0.0)))
+                             -(c["month_pnl"] or 0.0)))
     run.notes.append(f"promising {sum(1 for c in kept if c['wallet'] in promising)}")
     run.notes.append(f"candidates {len(out)}, prefilter {len(kept)}")
     logger.info("featured candidates: %d from %d sources, %d pass the pre-filter",
@@ -881,16 +900,21 @@ async def candle_excursions(run: Run, cap: int) -> int:
 async def run_daily(max_wallets: int | None = None) -> dict:
     """One full pass. Safe to call from the scheduler and from
     scripts/featured_backtest.py. Returns a summary."""
-    global _running, _last_run
+    global _running, _last_run, _wpm
     if _running:
         return {"skipped": "already running"}
     _running = True
+    first_pass = not await first_pass_done()
+    _wpm = FIRST_PASS_WPM if first_pass else FEATURED_WPM
     run = Run("daily")
     await run.open()
-    summary = {"started": run.started.isoformat()}
+    summary = {"started": run.started.isoformat(), "first_pass": first_pass, "wpm": _wpm}
     try:
         used_before = await weight_today()
-        budget_left = max(0, DAILY_WEIGHT_CAP - used_before - CANDLE_WEIGHT_CAP)
+        # the first pass has no daily cap (owner, 2026-10-29); after it the
+        # incremental runs stay under DAILY_WEIGHT_CAP
+        budget_left = 10 ** 9 if first_pass else max(0, DAILY_WEIGHT_CAP - used_before - CANDLE_WEIGHT_CAP)
+        run.notes.append("first pass 25%/min, no cap" if first_pass else "incremental 5%/min")
         cands = await candidates(run)
         if max_wallets:
             cands = cands[:max_wallets]
@@ -933,6 +957,9 @@ async def run_daily(max_wallets: int | None = None) -> dict:
         summary.update({"candidates": len(cands), "processed": done, "qualified": qualified, "deferred": deferred,
                         "weight": run.weight, "requests": run.requests, "dropped_notes": notes, "candles": cand_n})
         await run.close(True, f"processed {done}, qualified {qualified}, deferred {deferred}")
+        if first_pass and deferred == 0 and not (_stop is not None and _stop.is_set()):
+            await mark_first_pass_done()
+            logger.info("featured: first pass complete, daily runs drop to 5%%/min under %d/day", DAILY_WEIGHT_CAP)
         logger.info("featured daily: %s", summary)
     except Exception as exc:
         logger.exception("featured daily failed")
@@ -942,6 +969,20 @@ async def run_daily(max_wallets: int | None = None) -> dict:
         _running = False
         _last_run = summary
     return summary
+
+
+async def first_pass_done() -> bool:
+    sf = get_session_factory()
+    async with sf() as s:
+        return bool((await s.execute(text("SELECT 1 FROM featured_job_runs WHERE job='first_pass_done' LIMIT 1"))).scalar())
+
+
+async def mark_first_pass_done() -> None:
+    sf = get_session_factory()
+    async with sf() as s:
+        await s.execute(text("INSERT INTO featured_job_runs (job, started_at, finished_at, ok, notes) "
+                             "VALUES ('first_pass_done', UTC_TIMESTAMP(), UTC_TIMESTAMP(), 1, 'every candidate read once')"))
+        await s.commit()
 
 
 async def retention() -> None:
@@ -1000,4 +1041,4 @@ async def stop() -> None:
 
 
 def status() -> dict:
-    return {"running": _running, "last_run": _last_run, "pause_mult": _pause_mult}
+    return {"running": _running, "last_run": _last_run, "pause_mult": _pause_mult, "wpm": _wpm}
