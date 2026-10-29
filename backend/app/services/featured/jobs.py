@@ -224,6 +224,11 @@ async def candidates(run: Run) -> list[dict]:
             src.setdefault(w, set()).add("featured")
         ident = {w: (role, master) for w, role, master in (await s.execute(text(
             "SELECT wallet, role, master FROM wallet_identity"))).all()}
+        # the hourly fill sampler's 7-day stats (about 1,250 wallets): a cheap
+        # read on who trades like a trader, used only to ORDER the day's work
+        promising = set((await s.execute(text(
+            "SELECT LOWER(wallet_address) FROM trader_fill_stats WHERE trades_7d BETWEEN 3 AND 400 "
+            "AND (maker_ratio IS NULL OR maker_ratio < 0.6) AND (win_rate_7d IS NULL OR win_rate_7d >= 0.45)"))).scalars().all())
     # cohort flags (in-process, from the analytics sweep)
     try:
         from app.services.analytics import cohort
@@ -260,8 +265,11 @@ async def candidates(run: Run) -> list[dict]:
                  for c in out[i:i + 500]])
         await s.commit()
     kept = [c for c in out if c["prefilter"]]
-    # order: previously featured first, then by month pnl (file), then the rest
-    kept.sort(key=lambda c: (0 if "featured" in c["source"] else 1, -(c["month_pnl"] or 0.0)))
+    # order: previously featured first, then wallets whose 7-day fill stats look
+    # like a trader's, then the rest; by month pnl inside each group. The daily
+    # weight cap decides how far down the list a day gets.
+    kept.sort(key=lambda c: (0 if "featured" in c["source"] else (1 if c["wallet"] in promising else 2), -(c["month_pnl"] or 0.0)))
+    run.notes.append(f"promising {sum(1 for c in kept if c['wallet'] in promising)}")
     run.notes.append(f"candidates {len(out)}, prefilter {len(kept)}")
     logger.info("featured candidates: %d from %d sources, %d pass the pre-filter",
                 len(out), len({s for c in out for s in c['source'].split(',')}), len(kept))
