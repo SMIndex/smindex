@@ -35,6 +35,8 @@ DDL = [
     " venue ENUM('hl','perpl') NOT NULL DEFAULT 'hl',"
     " role ENUM('user','agent','vault','subAccount','missing','unknown') NOT NULL DEFAULT 'unknown',"
     " master CHAR(42) NULL, checked_at DATETIME NULL, sub_accounts JSON NULL, subs_checked_at DATETIME NULL,"
+    " fills_cursor_ms BIGINT NULL, funding_cursor_ms BIGINT NULL, fills_checked_at DATETIME NULL,"
+    " history_from DATETIME(3) NULL, portfolio JSON NULL, portfolio_at DATETIME NULL,"
     " KEY ix_wi_master (master)"
     ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
