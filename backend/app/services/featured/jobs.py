@@ -235,6 +235,8 @@ async def candidates(run: Run) -> list[dict]:
             reason = "cohort hedger flag"
         elif fr and fr["month_pnl"] < 500.0:
             reason = "30d pnl under 500"
+        elif fr and (fr.get("month_vlm") or 0) <= 0:
+            reason = "no volume"            # pnl with no trading: a vault or deposit artifact
         out.append({"wallet": w, "source": ",".join(sorted(sources))[:64], "prefilter": reason is None,
                     "reason": reason, **{k: fr.get(k) for k in ("month_pnl", "month_vlm", "account_value", "display_name")}})
     async with sf() as s:
@@ -406,6 +408,26 @@ async def identity(run: Run, wallet: str, ident: dict | None) -> dict:
             for sub in subs:
                 await _identity_set(sub, role="subAccount", master=wallet, checked_at=now)
     return await _identity_row(wallet) or {}
+
+
+async def _fills_count(wallet: str) -> int:
+    sf = get_session_factory()
+    async with sf() as s:
+        return int((await s.execute(text(
+            "SELECT COUNT(*) FROM hl_fills WHERE wallet=:w AND time >= UTC_TIMESTAMP() - INTERVAL 90 DAY"), {"w": wallet})).scalar() or 0)
+
+
+async def subaccounts_only(run: Run, wallet: str) -> list[str]:
+    """subAccounts (20 weight) without userRole, cached IDENTITY_TTL_DAYS."""
+    now = datetime.utcnow()
+    body = await hl_post(run, {"type": "subAccounts", "user": wallet})
+    if body is None:
+        return []
+    subs = sorted({str(x.get("subAccountUser") or "").lower() for x in (body or []) if x.get("subAccountUser")})
+    await _identity_set(wallet, sub_accounts=json.dumps(subs), subs_checked_at=now)
+    for sub in subs:
+        await _identity_set(sub, role="subAccount", master=wallet, checked_at=now)
+    return subs
 
 
 async def portfolio(run: Run, wallet: str, ident: dict | None) -> dict | None:
@@ -655,6 +677,19 @@ async def process_wallet(run: Run, cand: dict, coins: set[str], budget_left: int
         await ingest_fills(run, acct, aid)
         await ingest_funding(run, acct, aid)
     ident = await _identity_row(wallet) or {}
+    # 1b. a master with no fills of its own but volume on the leaderboard trades
+    # through sub-accounts (seen 2026-10-29: $19.8B month volume, 0 master fills):
+    # one subAccounts read (20 weight), then their fills join the record
+    if not ident.get("subs_checked_at") and len(accounts) == 1 and (cand.get("month_vlm") is None or float(cand.get("month_vlm") or 0) > 0):
+        n_master = await _fills_count(wallet)
+        if n_master == 0:
+            await subaccounts_only(run, wallet)
+            ident = await _identity_row(wallet) or {}
+            subs = [a for a in ident.get("sub_accounts", []) if a]
+            for sub in subs:
+                await ingest_fills(run, sub, await _identity_row(sub))
+                await ingest_funding(run, sub, await _identity_row(sub))
+            accounts = [wallet] + subs
     # 2. trips + lite metrics (no equity, no role)
     built = await rebuild_trips(wallet, accounts)
     trips = built["trips"]
