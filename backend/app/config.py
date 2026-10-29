@@ -70,6 +70,10 @@ class Settings(BaseSettings):
             return [str(w).strip().lower() for w in v if str(w).strip()]
         return v
     TELEGRAM_BOT_TOKEN: str = ""
+    # Featured traders whitelist requests go to this ONE chat and nowhere else
+    # (docs/featured-traders spec, Whitelist gate). Empty = no message is sent;
+    # the request is still saved and shows on the admin page.
+    ADMIN_TELEGRAM_CHAT_ID: str = ""
     LOG_LEVEL: str = "INFO"
     # Thin-book SMI (2026-09-29): assets whose CORE cohort OI is below this get
     # a "thin book" marker and no pulse tile. SMI is still computed + stored.

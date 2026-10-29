@@ -1073,6 +1073,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("migration v30 (beta) FAILED: %s", exc)
 
+    # --- migration v33: Featured traders (docs/featured-traders, 2026-10-29) --
+    try:
+        from app.services.featured.schema import DDL as _FEATURED_DDL
+        async with _dbm.engine.begin() as conn:
+            for _stmt in _FEATURED_DDL:
+                await conn.execute(text(_stmt))
+        if not getattr(app.state, "_v33_logged", False):
+            logger.info("migration v33: featured traders tables present")
+        app.state._v33_logged = True
+    except Exception as exc:
+        logger.warning("migration v33 (featured traders) FAILED: %s", exc)
+
     # Startup cleanup: liquidation_snapshots only needs the latest few rows per
     # market. The periodic pruning in liquidation_calc keeps it tight going
     # forward, but if rows accumulated (e.g. from before the pruning was added),
