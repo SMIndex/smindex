@@ -713,6 +713,17 @@ async def write_wallet_row(venue: str, wallet: str, m: dict, display_name: str |
     for k in ("pnl_per_volume",):
         if cols[k] is not None and abs(cols[k]) >= 1000:
             cols[k] = None
+    # column ranges: DECIMAL(8,4) fields hold up to 9999.9999 (a wallet whose
+    # realized curve fell far below a tiny starting equity broke the write)
+    for k in ("max_drawdown_90d", "avg_win_pct_eq", "avg_loss_pct_eq", "avg_win_move_pct", "avg_loss_move_pct",
+              "worst_trade_pct_eq", "largest_trade_share"):
+        if cols[k] is not None and abs(float(cols[k])) > 9999:
+            cols[k] = 9999.0 if float(cols[k]) > 0 else -9999.0
+    for k in ("profit_factor_90d", "profit_factor_30d"):
+        if cols[k] is not None and float(cols[k]) > 999999:
+            cols[k] = 999999.0
+    if cols["copiable_pct"] is not None:
+        cols["copiable_pct"] = max(0.0, min(100.0, float(cols["copiable_pct"])))
     names = ", ".join(cols)
     vals = ", ".join(f":{k}" for k in cols)
     upd = ", ".join(f"{k}=VALUES({k})" for k in cols if k not in ("as_of", "venue", "wallet"))
