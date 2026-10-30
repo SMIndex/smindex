@@ -588,10 +588,13 @@ async def write_trips(venue: str, wallet: str, trips: list[dict]) -> None:
         "nf": t["n_fills"], "na": t["n_adds"], "nc": t["n_closes"], "mf": t["maker_fills"],
         "ms": t["max_size"], "msu": round(t["max_size_usd"], 2), "vol": round(t["volume_usd"], 2),
         "ae": t["avg_entry"], "ax": t["avg_exit"], "mg": t.get("margin_usd"), "lev": t.get("leverage"),
-        "pg": t["pnl_gross"], "pu": t["pnl_usd"], "ppm": t.get("pnl_pct_margin"), "ret": t["ret_pct"],
+        "pg": t["pnl_gross"], "pu": t["pnl_usd"],
+        "ppm": (max(-999999.0, min(999999.0, float(t["pnl_pct_margin"]))) if t.get("pnl_pct_margin") is not None else None),
+        "ret": max(-999999.0, min(999999.0, float(t["ret_pct"]))),
         "fees": t["fees"], "fund": t["funding"], "et": (None if t["entry_taker"] is None else int(t["entry_taker"])),
         "ad": int(t["averaged_down"]), "aw": int(t["added_to_winner"]), "liq": int(t["liquidation"]),
-        "mae": t.get("mae_pct"), "mfe": t.get("mfe_pct"), "msrc": t.get("mae_src"),
+        "mae": (min(9999.0, float(t["mae_pct"])) if t.get("mae_pct") is not None else None),
+        "mfe": (min(9999.0, float(t["mfe_pct"])) if t.get("mfe_pct") is not None else None), "msrc": t.get("mae_src"),
         "acc": json.dumps(t.get("accounts") or []),
     } for t in trips]
     async with sf() as s:
