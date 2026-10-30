@@ -44,7 +44,7 @@ FIRST_PASS_WPM = 300.0                   # 25 % of 1,200: the first pass only (o
 DAILY_WEIGHT_CAP = int(os.environ.get("FEATURED_DAILY_WEIGHT_CAP", "28000"))
 _wpm = FEATURED_WPM                      # pace of the run in progress
 CANDLE_WEIGHT_CAP = 3000                 # of the daily cap, for trip excursions
-FILE_CANDIDATE_CAP = 2000
+FILE_CANDIDATE_CAP = 0                   # 0 = no cap: every pre-filtered leaderboard wallet is read (owner, 2026-10-30)
 FIRST_WINDOW_DAYS = 90
 PAGES_MAX = 5                            # 5 x 2,000 = the venue's 10,000-fill window
 FILLS_RETENTION_DAYS = 180
@@ -187,7 +187,7 @@ async def _stream_leaderboard_file(run: Run) -> dict[str, dict]:
                         continue
                     res[addr] = {"month_pnl": pnl, "month_vlm": vlm, "account_value": av,
                                  "display_name": (row.get("displayName") or None)}
-            if len(res) > FILE_CANDIDATE_CAP:
+            if FILE_CANDIDATE_CAP and len(res) > FILE_CANDIDATE_CAP:
                 keep = sorted(res.items(), key=lambda kv: -kv[1]["month_pnl"])[:FILE_CANDIDATE_CAP]
                 res = dict(keep)
             return res
@@ -658,9 +658,13 @@ async def _context(wallet: str, accounts: list[str]) -> dict:
     async with sf() as s:
         hedger = (await s.execute(text(
             "SELECT is_likely_hedger FROM analytics_wallet_flags WHERE wallet=:w"), {"w": wallet})).scalar()
+        # wash = fills against ONE private partner. A counterparty that trades
+        # against 10 or more of our wallets is a market maker, not a partner
+        # (the top one is seen against 725 wallets), so it is left out.
         cp = (await s.execute(text(
-            "SELECT other, SUM(n) FROM featured_counterparties WHERE wallet=:w AND day >= UTC_DATE() - INTERVAL 90 DAY "
-            "GROUP BY other ORDER BY 2 DESC LIMIT 1"), {"w": wallet})).first()
+            "SELECT c.other, SUM(c.n) FROM featured_counterparties c WHERE c.wallet=:w AND c.day >= UTC_DATE() - INTERVAL 90 DAY "
+            "AND c.other NOT IN (SELECT other FROM (SELECT other FROM featured_counterparties GROUP BY other "
+            "HAVING COUNT(DISTINCT wallet) >= 10) mm) GROUP BY c.other ORDER BY 2 DESC LIMIT 1"), {"w": wallet})).first()
         cp_total = (await s.execute(text(
             "SELECT COALESCE(SUM(n),0) FROM featured_counterparties WHERE wallet=:w AND day >= UTC_DATE() - INTERVAL 90 DAY"),
             {"w": wallet})).scalar()
