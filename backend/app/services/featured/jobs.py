@@ -933,6 +933,16 @@ async def run_daily(max_wallets: int | None = None) -> dict:
         cands = await candidates(run)
         if max_wallets:
             cands = cands[:max_wallets]
+        # a restart mid-pass must not re-read what was read in the last 20 h
+        # (775 re-touches cost about 35,000 weight); the daily cadence is 24 h
+        sf0 = get_session_factory()
+        async with sf0() as s0:
+            done_today = set((await s0.execute(text(
+                "SELECT wallet FROM featured_wallets WHERE venue='hl' AND computed_at >= UTC_TIMESTAMP() - INTERVAL 20 HOUR"))).scalars().all())
+        before = len(cands)
+        cands = [c for c in cands if c["wallet"] not in done_today]
+        if before != len(cands):
+            run.notes.append(f"{before - len(cands)} read in the last 20 h, not re-read")
         coins = await perpl_coins()
         done = qualified = deferred = 0
         for c in cands:
