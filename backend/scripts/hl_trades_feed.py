@@ -137,6 +137,9 @@ feat_acct: dict[str, str] = {}     # account -> featured master
 feat_subs: dict[str, list[str]] = {}
 feat_dirty: dict[str, int] = {}    # master -> newest trade ms to write
 feat_pos: dict[str, dict] = {}     # master -> featured_live positions payload to write
+feat_acct_pos: dict[str, dict] = {}  # account -> that account's positions from its last read
+feat_szi: dict[str, dict[str, float]] = {}  # account -> sizes at its last read; trades do not touch it,
+                                            # so a read after a closing fill still sees the position it closed
 pos_lev: dict[str, dict[str, float]] = {}   # master -> coin -> leverage from the last read
 close_q: list[tuple[str, str, int]] = []    # (master, coin, flat_ms) trips to close
 close_inflight: set[tuple[str, str]] = set()
@@ -594,7 +597,7 @@ async def pos_read(w: str, item: list) -> None:
         if v:
             szi[str(p.get("coin"))] = v
     markets = [{"symbol": c, "side": "long" if v > 0 else "short"} for c, v in szi.items()]
-    if w in featured:
+    if w in feat_acct:
         featured_positions(w, body, szi, st_ms)
     pos_szi[w] = dict(szi)
     pos_state_ms[w] = st_ms
@@ -683,7 +686,7 @@ async def watch_loop():
                     last_clean = time.monotonic()
             watch.clear()
             watch.update(str(w).lower() for w, _ in rows)
-            watch.update(featured)
+            watch.update(feat_acct)
             watch_profile.clear()
             watch_profile.update(str(w).lower() for w, p in rows if p)
         except Exception as exc:
@@ -718,9 +721,13 @@ def count_counterparty(a: str, b: str, tm: int) -> None:
         cp_counts[k] = cp_counts.get(k, 0) + 1
 
 
-def featured_positions(w: str, body: dict, szi: dict[str, float], st_ms: int) -> None:
-    """featured_live positions payload from a clearinghouseState read, and the
-    flat / flip check against the sizes this feed tracked before the read."""
+def featured_positions(acct: str, body: dict, szi: dict[str, float], st_ms: int) -> None:
+    """featured_live positions payload from a clearinghouseState read of one
+    account of a featured wallet (master or sub-account), merged over the
+    wallet's accounts, and the flat / flip check against the sizes of that
+    account's previous read. Measured 2026-10-31: comparing with pos_szi
+    never fired, the trade handler had already removed the closed coin."""
+    w = feat_acct.get(acct) or acct
     positions = []
     levs: dict[str, float] = {}
     unreal = 0.0
@@ -742,13 +749,22 @@ def featured_positions(w: str, body: dict, szi: dict[str, float], st_ms: int) ->
                           "margin_usd": float(p.get("marginUsed") or 0) or None,
                           "roe": (float(p.get("returnOnEquity")) if p.get("returnOnEquity") else None)})
     av = float((body.get("marginSummary") or {}).get("accountValue") or 0) or None
-    feat_pos[w] = {"positions": positions, "unrealized": round(unreal, 2), "account_value": av, "at": st_ms}
-    before = pos_szi.get(w) or {}
-    for coin, old in before.items():
+    feat_acct_pos[acct] = {"positions": positions, "unrealized": round(unreal, 2), "account_value": av, "at": st_ms}
+    merged, unreal_all, av_all = [], 0.0, 0.0
+    for a in [w] + [x for x in feat_subs.get(w, []) if x and x != w]:
+        ap = feat_acct_pos.get(a)
+        if ap:
+            merged += ap["positions"]
+            unreal_all += ap["unrealized"]
+            av_all += ap["account_value"] or 0.0
+    feat_pos[w] = {"positions": merged, "unrealized": round(unreal_all, 2), "account_value": av_all or None, "at": st_ms}
+    before = feat_szi.get(acct)
+    for coin, old in (before or {}).items():
         new = szi.get(coin, 0.0)
         if old and (new == 0.0 or old * new < 0):
             if (w, coin) not in close_inflight:
                 close_q.append((w, coin, st_ms))
+    feat_szi[acct] = dict(szi)
     if levs:
         pos_lev.setdefault(w, {}).update(levs)
 
@@ -795,7 +811,11 @@ async def featured_reload_loop():
                 lst = accts_of.setdefault(w, [w])
                 if a not in lst:
                     lst.append(a)
-            watch.update(featured)
+            for a in list(feat_szi):
+                if a not in new_acct:
+                    feat_szi.pop(a, None)
+                    feat_acct_pos.pop(a, None)
+            watch.update(feat_acct)
             if added:
                 logger.info("hl trades feed: featured wallets now %d (%d accounts), %d new, %d candidate accounts",
                             len(featured), len(feat_acct), len(added), len(cp_accts))

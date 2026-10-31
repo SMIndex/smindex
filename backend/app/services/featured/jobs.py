@@ -46,7 +46,9 @@ _wpm = FEATURED_WPM                      # pace of the run in progress
 CANDLE_WEIGHT_CAP = 3000                 # of the daily cap, for trip excursions
 FILE_CANDIDATE_CAP = 0                   # 0 = no cap: every pre-filtered leaderboard wallet is read (owner, 2026-10-30)
 FIRST_WINDOW_DAYS = 90
-PAGES_MAX = 5                            # 5 x 2,000 = the venue's 10,000-fill window
+PAGES_MAX = 60                           # pages until a short page; 60 x 2,000 is a hard stop only
+                                         # (2026-10-31: a wallet had 10,737 fills in 90 days and the old
+                                         # 5-page cap cut its most recent week)
 FILLS_RETENTION_DAYS = 180
 IDENTITY_TTL_DAYS = 30
 LEADERBOARD_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
@@ -383,8 +385,7 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
             break
         # No early stop on a dense first page (tried 2026-10-29: a trader with one
         # 76-minute burst of 2,000 small fills lost 7 weeks of trades). The
-        # venue serves the oldest 2,000 of its 10,000-fill window first, so the
-        # 5-page cap always reaches the present.
+        # venue serves the oldest 2,000 first; page until a short page.
         start = int(body[-1]["time"]) + 1
     history_from_ms = None
     if first and total >= 10_000 and earliest:
@@ -547,12 +548,16 @@ async def _load_fills(accounts: list[str], since_ms: int) -> tuple[list[dict], l
         rows = (await s.execute(q, {"accts": accounts, "t": since})).all()
         fq = text("SELECT wallet, time, coin, usdc FROM hl_funding WHERE wallet IN :accts AND time >= :t").bindparams(bindparam("accts", expanding=True))
         frows = (await s.execute(fq, {"accts": accounts, "t": since})).all()
-    fills = [{"account": r[0], "tid": int(r[1]), "time": rt.dt_to_ms(r[2]), "coin": r[3], "dir": r[4] or "", "side": r[5],
-              "px": float(r[6]), "sz": float(r[7]), "closed_pnl": float(r[8]), "fee": float(r[9]),
-              "crossed": (None if r[10] is None else bool(r[10])), "start_position": float(r[11]), "hash": r[12],
-              "oid": r[13], "liquidation": bool(r[14])} for r in rows]
-    funding = [{"time": rt.dt_to_ms(r[1]), "coin": r[2], "usdc": float(r[3])} for r in frows]
-    return fills, funding
+
+    def _convert():
+        # thousands of rows per wallet: off the event loop (2.4 s stalls seen 2026-10-31)
+        fills = [{"account": r[0], "tid": int(r[1]), "time": rt.dt_to_ms(r[2]), "coin": r[3], "dir": r[4] or "", "side": r[5],
+                  "px": float(r[6]), "sz": float(r[7]), "closed_pnl": float(r[8]), "fee": float(r[9]),
+                  "crossed": (None if r[10] is None else bool(r[10])), "start_position": float(r[11]), "hash": r[12],
+                  "oid": r[13], "liquidation": bool(r[14])} for r in rows]
+        funding = [{"time": rt.dt_to_ms(r[1]), "coin": r[2], "usdc": float(r[3])} for r in frows]
+        return fills, funding
+    return await asyncio.to_thread(_convert)
 
 
 async def _leverage_hints(wallet: str, trips: list[dict]) -> None:
@@ -941,7 +946,10 @@ async def run_daily(max_wallets: int | None = None) -> dict:
         sf0 = get_session_factory()
         async with sf0() as s0:
             done_today = set((await s0.execute(text(
-                "SELECT wallet FROM featured_wallets WHERE venue='hl' AND computed_at >= UTC_TIMESTAMP() - INTERVAL 20 HOUR"))).scalars().all())
+                "SELECT wallet FROM featured_wallets WHERE venue='hl' AND computed_at >= UTC_TIMESTAMP() - INTERVAL 20 HOUR "
+                # a read that stopped at the page cap left the cursor a day or more behind the read time: read again
+                "AND wallet NOT IN (SELECT wallet FROM wallet_identity WHERE fills_cursor_ms IS NOT NULL AND fills_checked_at IS NOT NULL "
+                "AND fills_cursor_ms < UNIX_TIMESTAMP(fills_checked_at - INTERVAL 1 DAY) * 1000)"))).scalars().all())
         before = len(cands)
         cands = [c for c in cands if c["wallet"] not in done_today]
         if before != len(cands):
