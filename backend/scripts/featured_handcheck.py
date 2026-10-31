@@ -61,6 +61,34 @@ async def funding_90d(c: httpx.AsyncClient, acct: str, now_ms: int) -> list[dict
     return out
 
 
+def chain(fs: list[dict]) -> list[dict]:
+    """Fills with one timestamp arrive in tid order, not in the order they
+    happened: inside each timestamp group, take the fill that starts at the
+    running position, then the one that starts where it ended, and so on."""
+    out, i, pos = [], 0, None
+    while i < len(fs):
+        j = i
+        while j < len(fs) and fs[j]["time"] == fs[i]["time"]:
+            j += 1
+        group, left, ordered, cur = fs[i:j], list(fs[i:j]), [], pos
+        if len(group) > 1:
+            while left:
+                nxt = next((g for g in left if cur is not None and abs(float(g["startPosition"]) - cur) <= max(1e-6, abs(cur) * 1e-6)), None)
+                if nxt is None:
+                    ends = [float(g["startPosition"]) + float(g["sz"]) * (1 if g["side"] == "B" else -1) for g in left]
+                    roots = [g for g in left if not any(abs(float(g["startPosition"]) - e) <= max(1e-6, abs(e) * 1e-6) for e in ends)]
+                    nxt = roots[0] if roots else left[0]
+                ordered.append(nxt)
+                left.remove(nxt)
+                cur = float(nxt["startPosition"]) + float(nxt["sz"]) * (1 if nxt["side"] == "B" else -1)
+            group = ordered
+        out += group
+        last = group[-1]
+        pos = float(last["startPosition"]) + float(last["sz"]) * (1 if last["side"] == "B" else -1)
+        i = j
+    return out
+
+
 def trades_from(fills: list[dict], funding: list[dict], now_ms: int) -> list[dict]:
     """Independent open-to-flat tracker. Returns closed trades (pnl, close time)."""
     by = defaultdict(list)
@@ -76,6 +104,7 @@ def trades_from(fills: list[dict], funding: list[dict], now_ms: int) -> list[dic
     trades = []
     for (_acct, coin), fs in by.items():
         fs.sort(key=lambda f: (int(f["time"]), int(f.get("tid") or 0)))
+        fs = chain(fs)
         open_t = None
         pnl = fee = 0.0
         for f in fs:
