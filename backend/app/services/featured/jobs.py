@@ -28,6 +28,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import bindparam, text
 
 from app.config import settings
@@ -46,6 +47,7 @@ _wpm = FEATURED_WPM                      # pace of the run in progress
 CANDLE_WEIGHT_CAP = 3000                 # of the daily cap, for trip excursions
 FILE_CANDIDATE_CAP = 0                   # 0 = no cap: every pre-filtered leaderboard wallet is read (owner, 2026-10-30)
 FIRST_WINDOW_DAYS = 90
+HL_RETRIES = 5                           # attempts per read on 429, shed, 5xx or transport error
 PAGES_MAX = 60                           # pages until a short page; 60 x 2,000 is a hard stop only
                                          # (2026-10-31: a wallet had 10,737 fills in 90 days and the old
                                          # 5-page cap cut its most recent week)
@@ -110,35 +112,45 @@ async def weight_today() -> int:
 
 
 async def hl_post(run: Run, payload: dict, *, timeout: float = 30.0):
-    """One paced Hyperliquid read. Returns the decoded body or None on a 429 /
-    shed (after doubling the pause). Raises on other HTTP errors."""
+    """One paced Hyperliquid read. A 429, a shed, a 5xx or a transport error
+    is retried with a growing pause (the venue answered 502/504 for two
+    minutes on 2026-10-31 and 43 wallets failed in that window). Returns the
+    decoded body, or None after HL_RETRIES failed attempts; raises on other
+    HTTP errors."""
     global _pause_mult
     info_type = str(payload.get("type") or "")
-    try:
-        resp = await hl_client.post_info(payload, priority=hl_client.BACKGROUND, timeout=timeout)
-    except hl_client.HLWeightShed as exc:
-        _pause_mult = min(_pause_mult * 2, 16.0)
-        run.notes.append(f"shed x{_pause_mult:.0f}")
-        logger.warning("featured %s: shed (%s), pause x%.0f", run.job, exc, _pause_mult)
-        await asyncio.sleep(30 * _pause_mult)
-        return None
-    run.requests += 1
-    if resp.status_code == 429:
-        _pause_mult = min(_pause_mult * 2, 16.0)
-        run.weight += hl_client.base_weight(info_type)
-        run.notes.append(f"429 x{_pause_mult:.0f}")
-        logger.warning("featured %s: 429 on %s, pause x%.0f", run.job, info_type, _pause_mult)
-        await asyncio.sleep(60 * _pause_mult)
-        return None
-    resp.raise_for_status()
-    body = await hl_client.decode_json(resp)
-    items = len(body) if isinstance(body, list) else 0
-    w = hl_client.base_weight(info_type) + hl_client.extra_weight(info_type, items)
-    run.weight += w
-    _pause_mult = max(1.0, _pause_mult * 0.9)
-    # pacing: FEATURED_WPM weight per minute -> sleep weight / WPM minutes
-    await asyncio.sleep(60.0 * w / _wpm * _pause_mult)
-    return body
+    for attempt in range(1, HL_RETRIES + 1):
+        try:
+            resp = await hl_client.post_info(payload, priority=hl_client.BACKGROUND, timeout=timeout)
+        except hl_client.HLWeightShed as exc:
+            _pause_mult = min(_pause_mult * 2, 16.0)
+            run.notes.append(f"shed x{_pause_mult:.0f}")
+            logger.warning("featured %s: shed (%s), pause x%.0f", run.job, exc, _pause_mult)
+            await asyncio.sleep(30 * _pause_mult)
+            continue
+        except httpx.HTTPError as exc:
+            _pause_mult = min(_pause_mult * 2, 16.0)
+            logger.warning("featured %s: %s on %s (try %d), pause x%.0f", run.job, type(exc).__name__, info_type, attempt, _pause_mult)
+            await asyncio.sleep(30 * _pause_mult)
+            continue
+        run.requests += 1
+        if resp.status_code == 429 or resp.status_code >= 500:
+            _pause_mult = min(_pause_mult * 2, 16.0)
+            run.weight += hl_client.base_weight(info_type)
+            run.notes.append(f"{resp.status_code} x{_pause_mult:.0f}")
+            logger.warning("featured %s: %d on %s (try %d), pause x%.0f", run.job, resp.status_code, info_type, attempt, _pause_mult)
+            await asyncio.sleep(60 * _pause_mult)
+            continue
+        resp.raise_for_status()
+        body = await hl_client.decode_json(resp)
+        items = len(body) if isinstance(body, list) else 0
+        w = hl_client.base_weight(info_type) + hl_client.extra_weight(info_type, items)
+        run.weight += w
+        _pause_mult = max(1.0, _pause_mult * 0.9)
+        # pacing: FEATURED_WPM weight per minute -> sleep weight / WPM minutes
+        await asyncio.sleep(60.0 * w / _wpm * _pause_mult)
+        return body
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +369,7 @@ async def ingest_fills(run: Run, account: str, ident: dict | None) -> dict:
         body = await hl_post(run, {"type": "userFillsByTime", "user": account, "startTime": start,
                                    "endTime": now_ms, "aggregateByTime": True})
         if body is None:
-            break
+            raise RuntimeError("fills read failed after retries")   # not marked read: retried on the next pass
         pages += 1
         batch = [f for f in body if f.get("tid") is not None]
         total += len(body)
@@ -411,7 +423,7 @@ async def ingest_funding(run: Run, account: str, ident: dict | None) -> int:
     for _ in range(PAGES_MAX):
         body = await hl_post(run, {"type": "userFunding", "user": account, "startTime": start, "endTime": now_ms})
         if body is None:
-            break
+            raise RuntimeError("funding read failed after retries")
         rows = []
         for e in body:
             d = e.get("delta") or {}
