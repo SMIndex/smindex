@@ -175,6 +175,32 @@ check("lost bet settled at 0 is a closed losing trip", (len(o5["trips"]), round(
 check("won bet settled at 1 is a closed winning trip", round(o5["trips"][1]["pnl_usd"], 5), 60.0)
 check("nothing left open after settlement", o5["open"], {})
 
+print("spot fills are balances, not positions")
+o6 = build_trips([fill(100, "@107", "B", 1000, 0.5, 0.0), fill(200, "@107", "A", 1000, 0.6, 1000.0, pnl=100.0),
+                  fill(300, "PURR/USDC", "B", 10, 1.0, 0.0), fill(400, "PURR/USDC", "A", 10, 2.0, 10.0, pnl=10.0),
+                  fill(500, "SOL", "B", 1, 100.0, 0.0), fill(600, "SOL", "A", 1, 110.0, 1.0, pnl=10.0)])
+check("spot pairs make no trip, the perp does", [(t["coin"], round(t["pnl_usd"], 2)) for t in o6["trips"]], [("SOL", 10.0)])
+
+print("same-millisecond fills are chained by position, not by tid order")
+o7 = build_trips([fill(100, "LIT", "B", 5000, 1.0, 0.0, tid=5), fill(100, "LIT", "B", 5000, 1.0, 10000.0, tid=1),
+                  fill(100, "LIT", "B", 5000, 1.0, 15000.0, tid=2), fill(100, "LIT", "B", 5000, 1.0, 5000.0, tid=9),
+                  fill(200, "LIT", "A", 20000, 1.1, 20000.0, pnl=2000.0)])
+check("one trip, four adds, no gap", (len(o7["trips"]), o7["trips"][0]["n_fills"], o7["trips"][0]["max_size"], o7["skipped_pre"]), (1, 5, 20000.0, 0))
+o7b = build_trips([fill(100, "HYPE", "A", 50, 10.0, -450.0, tid=3), fill(200, "HYPE", "B", 50, 10.0, -400.0, pnl=1.0, tid=8),
+                   fill(200, "HYPE", "B", 50, 10.0, -350.0, pnl=1.0, tid=1), fill(300, "HYPE", "B", 300, 10.0, -300.0, pnl=6.0, tid=4)])
+check("pre-history short closed in chained pieces: no trip, 4 skipped", (len(o7b["trips"]), o7b["skipped_pre"]), (0, 4))
+
+print("a position that appears from nowhere is of unknown origin until flat")
+o8 = build_trips([fill(100, "kPEPE", "B", 100, 1.0, 0.0), fill(200, "kPEPE", "A", 100, 1.1, 100.0, pnl=10.0),
+                  fill(300, "kPEPE", "B", 750, 1.0, 150.0),                      # venue says 150 were already there: no fill for them
+                  fill(400, "kPEPE", "A", 900, 1.2, 900.0, pnl=180.0),           # closes to flat: not a trip, entry unknown
+                  fill(500, "kPEPE", "B", 100, 1.0, 0.0), fill(600, "kPEPE", "A", 100, 1.3, 100.0, pnl=30.0)])
+check("two trips around the unknown-origin position", [round(t["pnl_usd"], 2) for t in o8["trips"]], [10.0, 30.0])
+check("the add and the close of unknown origin are skipped", o8["skipped_pre"], 2)
+o9 = build_trips([fill(100, "BTC", "A", 3.1855, 100.0, 0.0), fill(200, "BTC", "A", 0.1, 100.0, -3.1971),   # small gap inside the trip: adopted
+                  fill(300, "BTC", "B", 3.2971, 90.0, -3.2971, pnl=33.0)])
+check("a gap inside a trip keeps the trip at the venue's size", (len(o9["trips"]), o9["trips"][0]["max_size"], round(o9["trips"][0]["pnl_usd"], 2)), (1, 3.2971, 33.0))
+
 n = sum(1 for c in checks if not c)
 print(f"\n{len(checks) - n} passed, {n} failed")
 sys.exit(1 if n else 0)

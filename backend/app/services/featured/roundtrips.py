@@ -174,6 +174,54 @@ def _finish(trip: dict, t: int) -> dict:
     return trip
 
 
+def is_spot_coin(coin: str) -> bool:
+    """Hyperliquid spot pairs are "@<index>" or "<BASE>/<QUOTE>"; perps never are."""
+    c = str(coin or "")
+    return c.startswith("@") or "/" in c
+
+
+def chain_same_time(cf: list[dict]) -> list[dict]:
+    """Fills sharing one timestamp come back in tid order, which is not the
+    order they happened in (2026-10-31: 58 of 73 apparent gaps on one wallet
+    were same-millisecond fills). Inside each timestamp group the fills are
+    chained by position: the one whose start matches the running position
+    first, then the one that starts where it ended, and so on."""
+    out: list[dict] = []
+    i = 0
+    pos: float | None = None
+    while i < len(cf):
+        j = i
+        while j < len(cf) and cf[j]["time"] == cf[i]["time"]:
+            j += 1
+        group = cf[i:j]
+        if len(group) > 1:
+            left = list(group)
+            ordered: list[dict] = []
+            cur = pos
+            while left:
+                nxt = None
+                if cur is not None:
+                    for g in left:
+                        if abs(g["start_position"] - cur) <= max(1e-6, abs(cur) * 1e-6):
+                            nxt = g
+                            break
+                if nxt is None:
+                    # no fill starts at the running position: take the one whose
+                    # start no other fill in the group ends at (the chain root)
+                    ends = [g["start_position"] + (g["sz"] if g["side"] == "B" else -g["sz"]) for g in left]
+                    roots = [g for g in left if not any(abs(g["start_position"] - e) <= max(1e-6, abs(e) * 1e-6) for e in ends)]
+                    nxt = roots[0] if roots else left[0]
+                ordered.append(nxt)
+                left.remove(nxt)
+                cur = nxt["start_position"] + (nxt["sz"] if nxt["side"] == "B" else -nxt["sz"])
+            group = ordered
+        out.extend(group)
+        last = group[-1]
+        pos = last["start_position"] + (last["sz"] if last["side"] == "B" else -last["sz"])
+        i = j
+    return out
+
+
 def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
     """fills: normalised (norm_fill) or raw venue fills, any order, any coins.
     Returns {"trips": [closed trips oldest first], "open": {coin: open trip
@@ -184,13 +232,17 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
     by_coin: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         # a Hyperliquid outcome market settles at price 0 (lost) or 1 (won)
-        # with a "Settlement" fill: price 0 is a real close, never dropped
+        # with a "Settlement" fill: price 0 is a real close, never dropped.
+        # Spot fills ("@107", "PURR/USDC") are balances, not positions: skipped.
+        if is_spot_coin(r["coin"]):
+            continue
         if r["sz"] > EPS and (r["px"] > EPS or r["dir"] == "Settlement"):
             by_coin[r["coin"]].append(r)
     trips: list[dict] = []
     open_now: dict[str, dict] = {}
     skipped_pre = 0
     for coin, cf in by_coin.items():
+        cf = chain_same_time(cf)
         trip: dict | None = None
         pos_known = False
         pos = 0.0
@@ -198,10 +250,16 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
         for f in cf:
             start = f["start_position"]
             if pos_known and abs(start - pos) > max(1e-6, abs(pos) * 1e-6):
-                # the venue's start position disagrees with ours (a fill we
-                # never stored): trust the venue and restart from it
-                if trip is not None and abs(start) < EPS:
-                    trip = None
+                # the venue's start position disagrees with ours: fills we never
+                # stored sit in between. Inside a trip the venue's figure is
+                # adopted and the trip goes on (entry and exit are known). With
+                # no trip open, a position that appears from nowhere is one of
+                # unknown origin, like a position opened before the stored
+                # history: nothing starts until the coin is flat again
+                # (2026-10-31: wallet 0x9a21 showed 5 trips whose entries the
+                # venue never served).
+                if trip is None and abs(start) > EPS:
+                    seen_flat = False
                 pos = start
             delta = f["sz"] if f["side"] == "B" else -f["sz"]
             end = start + delta

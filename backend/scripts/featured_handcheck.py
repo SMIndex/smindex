@@ -65,14 +65,16 @@ def trades_from(fills: list[dict], funding: list[dict], now_ms: int) -> list[dic
     """Independent open-to-flat tracker. Returns closed trades (pnl, close time)."""
     by = defaultdict(list)
     for f in fills:
-        by[f["coin"]].append(f)
+        if str(f["coin"]).startswith("@") or "/" in str(f["coin"]):
+            continue                                        # spot fills are balances, not positions
+        by[(f.get("_acct") or "", f["coin"])].append(f)     # one track per account and coin
     fund_by = defaultdict(list)
     for e in funding:
         d = e.get("delta") or {}
         if d.get("type") in (None, "funding") and d.get("coin"):
             fund_by[d["coin"]].append((int(e["time"]), float(d.get("usdc") or 0)))
     trades = []
-    for coin, fs in by.items():
+    for (_acct, coin), fs in by.items():
         fs.sort(key=lambda f: (int(f["time"]), int(f.get("tid") or 0)))
         open_t = None
         pnl = fee = 0.0
@@ -121,7 +123,7 @@ async def main(n: int) -> None:
             accts = [w] + [a for a in (json.loads(subs) if subs else []) if a]
             fills, funding = [], []
             for a in accts:
-                fills += await fills_90d(c, a, now_ms)
+                fills += [dict(f, _acct=a) for f in await fills_90d(c, a, now_ms)]
                 funding += await funding_90d(c, a, now_ms)
             tr = trades_from(fills, funding, now_ms)
             wins = sum(1 for t in tr if t["pnl"] > 0)
