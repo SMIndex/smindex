@@ -166,6 +166,15 @@ o4 = build_trips([fill(100, "SOL", "B", 1, 50, 0.0), fill(200, "SOL", "A", 1, 49
 check("filling someone else's liquidation is not a liquidation", o4["trips"][0]["liquidation"], False)
 check("being the liquidated user is", o4["trips"][1]["liquidation"], True)
 
+print("outcome market settlement at price 0")
+o5 = build_trips([dict(fill(100, "#10651", "B", 1321, 0.76921939, 0.0), dir="Buy"),
+                  dict(fill(200, "#10651", "A", 1321, 0.0, 1321.0, pnl=-1016.13881), dir="Settlement"),
+                  dict(fill(300, "#10652", "B", 100, 0.4, 0.0), dir="Buy"),
+                  dict(fill(400, "#10652", "A", 100, 1.0, 100.0, pnl=60.0), dir="Settlement")])
+check("lost bet settled at 0 is a closed losing trip", (len(o5["trips"]), round(o5["trips"][0]["pnl_usd"], 5), o5["trips"][0]["side"]), (2, -1016.13881, "long"))
+check("won bet settled at 1 is a closed winning trip", round(o5["trips"][1]["pnl_usd"], 5), 60.0)
+check("nothing left open after settlement", o5["open"], {})
+
 n = sum(1 for c in checks if not c)
 print(f"\n{len(checks) - n} passed, {n} failed")
 sys.exit(1 if n else 0)

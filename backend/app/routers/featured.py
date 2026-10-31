@@ -638,6 +638,14 @@ async def admin_run(user: User = Depends(require_admin), maxWallets: int | None 
     return {"status": "started"}
 
 
+@admin_router.post("/recompute")
+async def admin_recompute(user: User = Depends(require_admin)) -> dict:
+    """Rebuild trips and metrics for every stored wallet from stored fills (no venue reads)."""
+    import asyncio
+    asyncio.get_event_loop().create_task(jobs.recompute_all())
+    return {"status": "started"}
+
+
 @admin_router.post("/run-perpl")
 async def admin_run_perpl(user: User = Depends(require_admin)) -> dict:
     from app.services.featured import perpl as fperpl

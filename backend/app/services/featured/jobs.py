@@ -1013,6 +1013,45 @@ async def mark_first_pass_done() -> None:
         await s.commit()
 
 
+async def recompute_all() -> dict:
+    """Rebuild round trips and metrics for every wallet that has a row, from
+    the fills already stored: no Hyperliquid read. Used after a builder fix
+    (2026-10-31: settlement fills at price 0)."""
+    sf = get_session_factory()
+    async with sf() as s:
+        wallets = (await s.execute(text("SELECT DISTINCT wallet FROM featured_wallets WHERE venue='hl'"))).scalars().all()
+    coins = await perpl_coins()
+    now_ms = int(time.time() * 1000)
+    done = changed = 0
+    for w in wallets:
+        try:
+            ident = await _identity_row(w) or {}
+            accounts = [w] + [a for a in ident.get("sub_accounts", []) if a]
+            built = await rebuild_trips(w, accounts)
+            ctx = await _context(w, accounts)
+            pf = ident.get("portfolio") or {}
+            hist_ms = rt.dt_to_ms(ident["history_from"]) if ident.get("history_from") else None
+            m = await asyncio.to_thread(rt.compute_metrics, built["trips"], now_ms=now_ms, equity_avg=pf.get("avg_equity_90d"),
+                                        account_value=pf.get("account_value"), perpl_coins=coins, identity_role=ident.get("role"),
+                                        history_from_ms=hist_ms, net_pnl_all=pf.get("net_pnl_all"), **ctx)
+            async with sf() as s:
+                prev = (await s.execute(text(
+                    "SELECT qualified FROM featured_wallets WHERE venue='hl' AND wallet=:w ORDER BY as_of DESC LIMIT 1"), {"w": w})).scalar()
+                dn = (await s.execute(text(
+                    "SELECT display_name FROM featured_wallets WHERE venue='hl' AND wallet=:w ORDER BY as_of DESC LIMIT 1"), {"w": w})).scalar()
+            await write_wallet_row("hl", w, m, dn)
+            done += 1
+            if bool(prev) != bool(m["qualified"]):
+                changed += 1
+                logger.info("featured recompute: %s qualified %s -> %s (%d trips, wr %s)", w[:10], bool(prev), m["qualified"],
+                            m["trades_90d"], m["win_rate_90d"])
+        except Exception as exc:
+            logger.warning("featured recompute: %s failed: %s", w[:10], exc)
+        await asyncio.sleep(0)
+    logger.info("featured recompute: %d wallets, %d changed qualification", done, changed)
+    return {"wallets": done, "changed": changed}
+
+
 async def retention() -> None:
     sf = get_session_factory()
     async with sf() as s:

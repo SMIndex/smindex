@@ -107,15 +107,17 @@ async def main(n: int) -> None:
     sf = database.get_session_factory()
     async with sf() as s:
         rows = (await s.execute(text(
-            "SELECT f.wallet, f.trades_90d, f.win_rate_90d, f.profit_factor_90d, f.net_pnl_90d, i.sub_accounts FROM featured_wallets f "
+            "SELECT f.wallet, f.trades_90d, f.win_rate_90d, f.profit_factor_90d, f.net_pnl_90d, i.sub_accounts, f.computed_at FROM featured_wallets f "
             "LEFT JOIN wallet_identity i ON i.wallet=f.wallet WHERE f.venue='hl' AND f.qualified=1 "
             "AND f.as_of=(SELECT MAX(as_of) FROM featured_wallets) ORDER BY f.score DESC LIMIT :n"), {"n": n})).all()
-    now_ms = int(time.time() * 1000)
     print(f"| wallet | trades stored / hand | win rate stored / hand | PF stored / hand | net stored / hand | within 1% |")
     print("| --- | --- | --- | --- | --- | --- |")
     ok_all = True
     async with httpx.AsyncClient() as c:
-        for w, n_tr, wr, pf, net, subs in rows:
+        for w, n_tr, wr, pf, net, subs, computed_at in rows:
+            # the same 90-day window the stored row used (its computation time), so
+            # trades that left or entered the window since are not counted as drift
+            now_ms = int(computed_at.replace(tzinfo=__import__("datetime").timezone.utc).timestamp() * 1000)
             accts = [w] + [a for a in (json.loads(subs) if subs else []) if a]
             fills, funding = [], []
             for a in accts:

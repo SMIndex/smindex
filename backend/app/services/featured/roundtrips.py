@@ -183,7 +183,9 @@ def build_trips(fills: list[dict], funding: list[dict] | None = None) -> dict:
     rows.sort(key=lambda r: (r["time"], r["tid"]))
     by_coin: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["sz"] > EPS and r["px"] > EPS:
+        # a Hyperliquid outcome market settles at price 0 (lost) or 1 (won)
+        # with a "Settlement" fill: price 0 is a real close, never dropped
+        if r["sz"] > EPS and (r["px"] > EPS or r["dir"] == "Settlement"):
             by_coin[r["coin"]].append(r)
     trips: list[dict] = []
     open_now: dict[str, dict] = {}
