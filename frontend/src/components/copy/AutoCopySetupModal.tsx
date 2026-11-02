@@ -192,10 +192,22 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
           {avail.data && !avail.data.live_switch_on && (
             <p className="text-[11px] text-warning mt-1">Live auto-copy is switched off on the server right now; Live subscriptions only log until it is enabled.</p>
           )}
+          {avail.data && !keyPresent && (
+            <p className="text-[11px] text-text-secondary mt-1">
+              <b>Live is greyed out</b> because this wallet has no Perpl auto-copy key yet. Tick the box below and press
+              "Create auto-copy key" (your wallet signs once); Live becomes selectable right after. Shadow needs no key.
+            </p>
+          )}
+          {userSettings.data && userSettings.data.enabled === false && (
+            <p className="text-[11px] text-warning mt-1">
+              Auto-copy is switched <b>off</b> for your wallet in <a href="/settings" className="underline">Settings</a>. Turn it on there,
+              or this subscription will not copy anything.
+            </p>
+          )}
         </div>
 
         <div className="px-3 py-3 rounded-lg border border-text-secondary/15 space-y-2">
-          <div className="text-xs font-semibold text-text-primary">Perpl key for auto-copy {keyPresent ? ': connected' : ''}</div>
+          <div className="text-xs font-semibold text-text-primary">Perpl key for auto-copy {keyPresent ? ': connected' : ': needed for Live, not for Shadow'}</div>
           {keyPresent ? (
             <>
               <p className="text-[11px] text-text-secondary">Key <span className="font-mono">{avail.data?.key.public_key?.slice(0, 12)}…</span>
@@ -221,6 +233,7 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
                       className="text-xs px-3 py-2 rounded-lg bg-accent/15 text-accent border border-accent/30 min-h-[44px] disabled:opacity-50">
                 {busy === 'key' ? 'Waiting for wallet…' : 'Create auto-copy key'}
               </button>
+              {!consent && <p className="text-[11px] text-text-secondary">Tick the box above to enable this button.</p>}
             </>
           )}
         </div>
