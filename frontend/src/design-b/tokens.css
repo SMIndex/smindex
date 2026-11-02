@@ -564,7 +564,7 @@
 .dsb .kv2 b { font-size: 13px; font-weight: 600; }
 
 /* Parameters drawer */
-.dsb .drawer-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 300; display: flex; justify-content: flex-end; }
+.dsb .drawer-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 80; display: flex; justify-content: flex-end; }  /* below app modals (90) and the risk dialog (130), see featured.css */
 .dsb .drawer { width: min(420px, 92vw); height: 100%; background: var(--s1); border-left: 1px solid var(--line);
   padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .dsb .drawer h2 { margin: 0; }
