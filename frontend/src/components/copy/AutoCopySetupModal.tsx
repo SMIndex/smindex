@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
-import { useSignTypedData } from 'wagmi';
+import { useAccount, useConnect, useSignTypedData } from 'wagmi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Modal from '@/components/common/Modal';
 import { shortenAddress } from '@/lib/formatters';
@@ -37,6 +37,12 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
 }) {
   const qc = useQueryClient();
   const { signTypedDataAsync } = useSignTypedData();
+  // The session can be restored from a saved token while the wallet itself is
+  // not connected in this tab; the key needs a wallet signature, so say so and
+  // offer the connectors here instead of failing with "Connector not connected".
+  const { isConnected: walletConnected, address: walletAddress } = useAccount();
+  const { connectors, connectAsync } = useConnect();
+  const walletMismatch = walletConnected && !!walletAddress && walletAddress.toLowerCase() !== address.toLowerCase();
   const presets = useQuery({ queryKey: ['copy-auto-presets'], queryFn: getPresets, enabled: isOpen });
   const avail = useQuery({ queryKey: ['copy-auto-avail', leaderWallet], queryFn: () => getAvailability(leaderWallet), enabled: isOpen });
   const userSettings = useQuery({ queryKey: ['copy-auto-settings'], queryFn: getAutoSettings, enabled: isOpen });
@@ -65,7 +71,15 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
   const summary = useMemo(() => (form ? summarySentence(form) : ''), [form]);
   const keyPresent = !!avail.data?.key?.present;
 
+  const connectWallet = async (c: (typeof connectors)[number]) => {
+    setErr(null); setBusy('connect');
+    try { await connectAsync({ connector: c }); }
+    catch (e: any) { setErr(e?.shortMessage || e?.message || 'Wallet connection failed'); }
+    finally { setBusy(null); }
+  };
   const createKey = async () => {
+    if (!walletConnected) { setErr('Connect your wallet in this tab first (buttons above), then create the key.'); return; }
+    if (walletMismatch) { setErr(`The connected wallet (${shortenAddress(walletAddress!)}) is not the signed-in wallet (${shortenAddress(address)}). Switch wallets or sign out and in again.`); return; }
     if (!(await ensureRiskAck())) return;
     setErr(null); setBusy('key');
     try {
@@ -225,15 +239,35 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
                 need your wallet signature. The key is stored encrypted on SMINDEX servers, used only by the auto-copy worker, never shown
                 again, and you can delete it here in one tap (or revoke it at app.perpl.xyz/apikeys). Your wallet signs once to create it.
               </p>
+              {!walletConnected && (
+                <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-[12px] text-warning space-y-2">
+                  <div>Your wallet is not connected in this tab (you are signed in from a saved session). The key needs one wallet signature, so connect it first:</div>
+                  <div className="flex flex-wrap gap-2">
+                    {connectors.map((c) => (
+                      <button key={c.uid} onClick={() => connectWallet(c)} disabled={busy === 'connect'}
+                              className="text-xs px-3 py-2 rounded-lg bg-accent/15 text-accent border border-accent/30 min-h-[44px] disabled:opacity-50">
+                        {busy === 'connect' ? 'Connecting…' : `Connect ${c.name}`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {walletMismatch && (
+                <div className="px-3 py-2 rounded-lg bg-danger/10 border border-danger/30 text-[12px] text-danger">
+                  The connected wallet ({shortenAddress(walletAddress!)}) is not the signed-in wallet ({shortenAddress(address)}). Switch wallets, or sign out and in with this one.
+                </div>
+              )}
               <label className="flex items-start gap-2 text-[12px] text-text-primary min-h-[44px] cursor-pointer">
                 <input type="checkbox" className="mt-0.5 w-5 h-5" checked={consent} onChange={() => setConsent(!consent)} />
                 I understand this key lets SMINDEX place and cancel orders on my Perpl account for auto-copy.
               </label>
-              <button onClick={createKey} disabled={!consent || busy === 'key'}
+              <button onClick={createKey} disabled={!consent || !walletConnected || walletMismatch || busy === 'key'}
                       className="text-xs px-3 py-2 rounded-lg bg-accent/15 text-accent border border-accent/30 min-h-[44px] disabled:opacity-50">
                 {busy === 'key' ? 'Waiting for wallet…' : 'Create auto-copy key'}
               </button>
               {!consent && <p className="text-[11px] text-text-secondary">Tick the box above to enable this button.</p>}
+              {consent && !walletConnected && <p className="text-[11px] text-text-secondary">Connect your wallet (above) to enable this button.</p>}
+              {err && busy !== 'save' && <div className="px-3 py-2 rounded-lg bg-danger/10 border border-danger/30 text-[12px] text-danger">{err}</div>}
             </>
           )}
         </div>
