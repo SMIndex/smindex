@@ -246,7 +246,7 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
                     {connectors.map((c) => (
                       <button key={c.uid} onClick={() => connectWallet(c)} disabled={busy === 'connect'}
                               className="text-xs px-3 py-2 rounded-lg bg-accent/15 text-accent border border-accent/30 min-h-[44px] disabled:opacity-50">
-                        {busy === 'connect' ? 'Connecting…' : `Connect ${c.name}`}
+                        {busy === 'connect' ? 'Connecting…' : `Connect ${c.name === 'Injected' ? 'browser wallet (MetaMask, Rabby, OKX...)' : c.name}`}
                       </button>
                     ))}
                   </div>
