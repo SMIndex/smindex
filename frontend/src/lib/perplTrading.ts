@@ -88,7 +88,24 @@ async function getFreshBlock(): Promise<number> {
   }
 };
 
-let requestId = Date.now();
+// Plain counter seeded from the venue's lfr (mt:19 as[].lfr), never from the
+// clock: clock-seeded ids were rejected sr:32 whenever their low 32 bits were
+// >= 2^31 even when far above lfr (14 terminal orders on 2026-10-28, two
+// auto-copy orders on 2026-11-03). Perpl's own app uses lfr + 1.
+let requestId = 0;
+
+function nextRequestId(): number {
+  if (requestId <= 0) {
+    throw new Error('Perpl session has no account snapshot yet (request counter unseeded). Reconnect and retry.');
+  }
+  let v = requestId + 1;
+  // Same hedge as the auto-copy worker: skip the low-32-bit band the venue has
+  // rejected on every observed order; the id stays strictly increasing.
+  const low = v % 4294967296;
+  if (low >= 2147483648) v = (Math.floor(v / 4294967296) + 1) * 4294967296;
+  requestId = v;
+  return v;
+}
 
 // Per Perpl docs, rq must be strictly increasing per account and > the
 // server's last-forwarded request (lfr): otherwise error 32. Bump our
@@ -820,7 +837,7 @@ export async function placeOrder(params: {
   // Always get fresh block right before sending order
   const currentBlock = await getFreshBlock();
 
-  const rq = ++requestId;
+  const rq = nextRequestId();
   const isLimit = params.orderMode === 'limit' && params.limitPrice;
   const orderType = params.side === 'long' ? 1 : 2;
   // OPEN size quantization rounds DOWN (audit A9): round-to-nearest could
@@ -910,7 +927,7 @@ export async function placeOrder(params: {
             // retry ONCE with a fresh rq (the old one can never have executed).
             if (ourOrder.st === 7 && ourOrder.sr === 32 && !sr32Retried) {
               sr32Retried = true;
-              rqCur = ++requestId;
+              rqCur = nextRequestId();
               order.rq = rqCur;
               console.warn('[perpl-order] rq raced (sr:32), retrying once with new rq', rqCur);
               try { session.ws?.send(JSON.stringify(order)); } catch {}
@@ -974,7 +991,7 @@ export async function placeOrder(params: {
         // swallowed the status of an order that DID execute, and a new-rq
         // re-issue would then duplicate it.
         lbRetried = true;
-        rqCur = ++requestId;
+        rqCur = nextRequestId();
         order.rq = rqCur;
         order.lb = session.lastBlock + (mcfg?.orderTtlBlocks || 6);
         console.warn('[perpl-order] lb expired with no status, re-issuing with new rq', rqCur);
@@ -1020,7 +1037,7 @@ export async function closePosition(params: {
   // Always get fresh block right before sending order
   const currentBlock = await getFreshBlock();
 
-  const rq = ++requestId;
+  const rq = nextRequestId();
   // CloseLong=3, CloseShort=4
   const orderType = params.side === 'long' ? 3 : 4;
   const scaledSize = Math.round(params.size * (10 ** params.sizeDecimals));
@@ -1066,7 +1083,7 @@ export async function closePosition(params: {
           if (ourOrder) {
             if (ourOrder.st === 7 && ourOrder.sr === 32 && !sr32Retried) {
               sr32Retried = true;
-              rqCur = ++requestId;
+              rqCur = nextRequestId();
               order.rq = rqCur;
               try { session.ws?.send(JSON.stringify(order)); } catch {}
               return;
@@ -1101,7 +1118,7 @@ export async function closePosition(params: {
         timer = arm(10000);
       } else if (!lbRetried && session.lastBlock > (order.lb as number) && session.ws === wsAtSend) {
         lbRetried = true;
-        rqCur = ++requestId;
+        rqCur = nextRequestId();
         order.rq = rqCur;
         order.lb = session.lastBlock + (closeMcfg?.orderTtlBlocks || 6);
         try { session.ws?.send(JSON.stringify(order)); } catch {}
@@ -1131,7 +1148,7 @@ export async function cancelOrder(params: { marketId: number; oid: number }): Pr
   if (!session.accountId) throw new Error('No account connected');
 
   const currentBlock = await getFreshBlock();
-  const rq = ++requestId;
+  const rq = nextRequestId();
   const order: Record<string, unknown> = {
     mt: 22,
     rq,
@@ -1197,7 +1214,7 @@ export async function modifyOrder(params: {
   requireMarketConfig(params.marketId);
 
   const currentBlock = await getFreshBlock();
-  let rq = ++requestId;
+  let rq = nextRequestId();
   const order = {
     mt: 22,
     rq,
@@ -1246,7 +1263,7 @@ function sendOrderRequest(
             // sr:32 rq race (multi-tab): docs say retry ONCE with a fresh rq.
             if (o.rq === order.rq && o.st === 7 && o.sr === 32 && !sr32Retried) {
               sr32Retried = true;
-              const newRq = ++requestId;
+              const newRq = nextRequestId();
               order.rq = newRq;
               onRqChange?.(newRq);
               console.warn(`${tag} rq raced (sr:32), retrying once with new rq`, newRq);
@@ -1438,7 +1455,7 @@ export async function placeSlTpOrder(params: {
     throw new Error(`Perpl allows ${triggerCap} armed SL/TP orders per account and you have ${armedTriggers}. Cancel one in Positions first.`);
   }
 
-  let rq = ++requestId;
+  let rq = nextRequestId();
   const linkedPosition = venuePositionId(params.marketId, params.side);
   const t = params.side === 'long' ? 3 : 4; // close side
   const tpc = params.side === 'long'

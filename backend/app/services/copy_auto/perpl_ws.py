@@ -7,7 +7,7 @@ perplApiKey.ts, field for field:
              authenticated on the first non-heartbeat frame; 3401/error = rejected.
   * blocks   mt:100 heartbeats carry the head block in `sn`; orders use
              lb = fresh block + orderTtlBlocks (market config, default 6).
-  * rq       strictly increasing, seeded from time.time_ns() and bumped from the
+  * rq       strictly increasing counter seeded from the venue's lfr (never the clock); bumped from the
              server's `lfr`; a timeout re-sends the SAME rq once (Perpl executes
              at most once per rq); sr:32 (rq too low) retries once with a new rq.
   * orders   mt:22 open  {t 1|2, p = mark*(1±ms/1e4), s = floor(size*10^sd), fl 4 IOC, lv, lb, ms}
@@ -67,8 +67,15 @@ class PerplTrader:
         self.ws = None
         self.block = 0
         self.block_at = 0.0
-        self.rq = time.time_ns() // 1000
+        # rq is a plain counter seeded from the venue's lfr (mt:19 as[].lfr), never
+        # from the clock. Clock-seeded ids (us or ms) were rejected sr:32 whenever
+        # their low 32 bits were >= 2^31 even though they were far above lfr
+        # (2026-11-03 account 569: lfr 805558451, rq 1793697744331892 rejected
+        # twice; same pattern on every rejected id since 10-28). Perpl's own app
+        # uses max(lastRequestId, lfr) + 1 on forwarding-enabled accounts.
+        self.rq = 0
         self.lfr = 0                        # venue's last forwarded request, as last reported
+        self.snapshot_seen = False          # mt:19 received, so rq is seeded
         self._waiters: list[tuple] = []     # (predicate, future)
         self._reader: asyncio.Task | None = None
 
@@ -85,10 +92,25 @@ class PerplTrader:
             self._bump(msg)
             if msg.get("mt") == 100:
                 continue
-            if msg.get("mt"):
+            # Do not hand the session out before the account snapshot: the rq
+            # counter is seeded from it, and an unseeded counter would start at 1.
+            if msg.get("mt") and self.snapshot_seen:
+                logger.info("Perpl session: account %s lfr %s", self.account_id, self.lfr)
                 self._reader = asyncio.get_event_loop().create_task(self._read())
                 return
-        raise TimeoutError("Perpl sign-in timeout")
+        raise TimeoutError("Perpl sign-in timeout" if not self.snapshot_seen
+                           else "Perpl sign-in: no account snapshot (mt:19) received")
+
+    def next_rq(self) -> int:
+        """Next request id: strictly above the venue's lfr and our last one. If the
+        low 32 bits would land at or above 2^31 (the band the venue has rejected
+        as sr:32 on every observed order), jump to the next multiple of 2^32: still
+        strictly increasing, so still valid under the documented rule."""
+        v = max(self.rq, self.lfr) + 1
+        if (v & 0xFFFFFFFF) >= 0x80000000:
+            v = ((v >> 32) + 1) << 32
+        self.rq = v
+        return v
 
     async def close(self) -> None:
         if self._reader:
@@ -112,6 +134,8 @@ class PerplTrader:
         for a in msg.get("as") or []:
             if isinstance(a, dict) and a.get("id") in (None, self.account_id):
                 cands.append(a.get("lfr"))
+                if msg.get("mt") == 19:
+                    self.snapshot_seen = True
         for lfr in cands:
             if isinstance(lfr, int) and not isinstance(lfr, bool):
                 if lfr > self.lfr:
@@ -191,9 +215,8 @@ class PerplTrader:
                 sr32 = True
                 # sr:32 = our rq is not above the venue's last request. That
                 # rq can never have executed, so a new one is safe - but it has
-                # to clear the venue's number, not just our own by one.
-                self.rq = max(self.rq, self.lfr, time.time_ns() // 1000) + 1
-                order["rq"] = self.rq
+                # to clear the venue's number (lfr may have arrived with the reject).
+                order["rq"] = self.next_rq()
                 continue
             if r.get("_sr32"):
                 raise OrderRejected("rq rejected twice (sr:32)")
@@ -203,9 +226,8 @@ class PerplTrader:
                           mark: float, size_decimals: int, price_decimals: int,
                           slippage_bps: int, ttl_blocks: int) -> dict:
         block = await self.fresh_block()
-        self.rq += 1
         mult = 1 + slippage_bps / 1e4 if side == "long" else 1 - slippage_bps / 1e4
-        order = {"mt": 22, "rq": self.rq, "mkt": market_id, "acc": self.account_id,
+        order = {"mt": 22, "rq": self.next_rq(), "mkt": market_id, "acc": self.account_id,
                  "t": 1 if side == "long" else 2,
                  "p": round(mark * mult * 10 ** price_decimals),
                  "s": int(size * 10 ** size_decimals + 1e-9), "fl": 4,
@@ -216,9 +238,8 @@ class PerplTrader:
                            size_decimals: int, price_decimals: int, slippage_bps: int,
                            ttl_blocks: int) -> dict:
         block = await self.fresh_block()
-        self.rq += 1
         mult = 1 - slippage_bps / 1e4 if side == "long" else 1 + slippage_bps / 1e4
-        order = {"mt": 22, "rq": self.rq, "mkt": market_id, "acc": self.account_id,
+        order = {"mt": 22, "rq": self.next_rq(), "mkt": market_id, "acc": self.account_id,
                  "t": 3 if side == "long" else 4,
                  "p": round(mark * mult * 10 ** price_decimals),
                  "s": round(size * 10 ** size_decimals), "fl": 4, "lv": 0,
@@ -231,13 +252,12 @@ class PerplTrader:
         t 3|4 close side, fl 0, lv 0, lb 0, tp = trigger, p = trigger -/+ 5%
         exec bound, and only the trigger CONDITION differs between SL and TP
         (long: SL fires at/below mark = tpc 4, TP at/above = tpc 3)."""
-        self.rq += 1
         bound = SLTP_EXEC_BOUND_PCT / 100
         if kind == "sl":
             tpc = 4 if side == "long" else 3        # LTEMark : GTEMark
         else:
             tpc = 3 if side == "long" else 4        # GTEMark : LTEMark
-        order = {"mt": 22, "rq": self.rq, "mkt": market_id, "acc": self.account_id,
+        order = {"mt": 22, "rq": self.next_rq(), "mkt": market_id, "acc": self.account_id,
                  "t": 3 if side == "long" else 4,
                  "p": round(trigger * ((1 - bound) if side == "long" else (1 + bound)) * 10 ** price_decimals),
                  "s": round(size * 10 ** size_decimals), "fl": 0, "lv": 0, "lb": 0,
@@ -265,8 +285,7 @@ class PerplTrader:
 
     async def cancel(self, *, market_id: int, oid) -> dict:
         block = await self.fresh_block()
-        self.rq += 1
-        order = {"mt": 22, "rq": self.rq, "mkt": market_id, "acc": self.account_id,
+        order = {"mt": 22, "rq": self.next_rq(), "mkt": market_id, "acc": self.account_id,
                  "oid": oid, "t": 5, "s": 0, "fl": 0, "lv": 0, "lb": block + 6}
 
         def match(o, rq):
