@@ -312,31 +312,67 @@ export default function FeaturedB() {
   );
 }
 
+// On phones the filter sheet is portalled outside .ft, so the pill styles do not
+// reach it: use the same fgroup / seg layout as Discover's sheet there.
+function Field<T extends string | number>({ label, value, opts, fmt, onChange, phone }: { label: string; value: T; opts: T[]; fmt: (v: T) => string; onChange: (v: T) => void; phone?: boolean }) {
+  if (!phone) return <PillSelect label={label} value={value} opts={opts} fmt={fmt} onChange={onChange} />;
+  return (
+    <div className="fgroup">
+      <span className="flabel">{label}</span>
+      <div className="seg">{opts.map((o) => <button key={String(o)} aria-pressed={value === o} onClick={() => onChange(o)}>{fmt(o)}</button>)}</div>
+    </div>
+  );
+}
+
 function Filters({ view, setView, coinOptions, phone }: { view: FtView; setView: (v: FtView) => void; coinOptions: string[]; phone?: boolean }) {
   const [coinsOpen, setCoinsOpen] = useState(false);
   const toggleCoin = (c: string) => setView({ ...view, coins: view.coins.includes(c) ? view.coins.filter((x) => x !== c) : [...view.coins, c] });
+  const canReset = !(ftFiltersActive(view) === 0 && view.sort === 'score' && view.dir === 'desc');
+  const coinChips = coinOptions.length === 0 ? <span className="sub">Coins appear once wallets are listed</span> : coinOptions.map((c) => (
+    <button key={c} className={phone ? 'chipbtn' : undefined} aria-pressed={view.coins.includes(c)} onClick={() => toggleCoin(c)}>{c}</button>));
   return (
     <>
-      <PillSelect label="Venue" value={view.venue} opts={['all', 'hl', 'perpl']} fmt={(v) => (v === 'all' ? 'All' : v === 'hl' ? 'Hyperliquid' : 'Perpl')} onChange={(v) => setView({ ...view, venue: v })} />
-      <PillSelect label="Label" value={view.label} opts={['both', 'consistent', 'asymmetric']} fmt={(v) => (v === 'both' ? 'Steady, Big winners' : v === 'consistent' ? 'Steady' : 'Big winners')} onChange={(v) => setView({ ...view, label: v })} />
-      <PillSelect label="Min win rate" value={view.minWinRate} opts={WR_OPTS} fmt={(v) => (v ? `${v}%` : 'Any')} onChange={(v) => setView({ ...view, minWinRate: v })} />
-      <PillSelect label="Min profit factor" value={view.minPf} opts={PF_OPTS} fmt={(v) => (v ? String(v) : 'Any')} onChange={(v) => setView({ ...view, minPf: v })} />
-      <PillSelect label="Min trades" value={view.minTrades} opts={TRADES_OPTS} fmt={(v) => String(v)} onChange={(v) => setView({ ...view, minTrades: v })} />
-      <PillSelect label="Min net profit" value={view.minProfit} opts={PROFIT_OPTS} fmt={(v) => (v ? usd(v, false, true) : '$500')} onChange={(v) => setView({ ...view, minProfit: v })} />
-      <PillSelect label="Max drawdown" value={view.maxDd} opts={DD_OPTS} fmt={(v) => (v ? `${v}%` : 'Any')} onChange={(v) => setView({ ...view, maxDd: v })} />
-      <PillSelect label="Max leverage" value={view.maxLev} opts={LEV_OPTS} fmt={(v) => (v ? `${v}x` : 'Any')} onChange={(v) => setView({ ...view, maxLev: v })} />
-      <PillSelect label="Account size" value={view.size} opts={SIZE_OPTS} fmt={(v) => SIZE_LABEL[v]} onChange={(v) => setView({ ...view, size: v })} />
-      <PillSelect label="Hold" value={view.hold} opts={HOLD_OPTS} fmt={(v) => HOLD_LABEL[v]} onChange={(v) => setView({ ...view, hold: v })} />
-      <button className="pill" aria-pressed={view.coins.length > 0} onClick={() => setCoinsOpen((o) => !o)}><b>Coins</b><span className="v">{view.coins.length ? view.coins.join(', ') : 'Any'} ▾</span></button>
-      <button className="pill" aria-pressed={view.perplOnly} onClick={() => setView({ ...view, perplOnly: !view.perplOnly })}><b>Perpl-listed only</b></button>
-      <PillSelect label="Active within" value={view.active} opts={ACTIVE_OPTS} fmt={(v) => ACTIVE_LABEL[v]} onChange={(v) => setView({ ...view, active: v })} />
-      <button className="btn" onClick={() => setView(FT_DEFAULT)} disabled={ftFiltersActive(view) === 0 && view.sort === 'score' && view.dir === 'desc'}>Reset</button>
-      {phone && <label className="sub" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={view.hideSmall} onChange={(e) => setView({ ...view, hideSmall: e.target.checked })} /> Hide small accounts (under $500 profit)</label>}
-      {(coinsOpen || phone) && (
-        <div className="coinbox" style={{ width: '100%' }}>
-          {coinOptions.length === 0 ? <span className="sub">Coins appear once wallets are listed</span> : coinOptions.map((c) => <button key={c} aria-pressed={view.coins.includes(c)} onClick={() => toggleCoin(c)}>{c}</button>)}
-          {view.coins.length > 0 && <button onClick={() => setView({ ...view, coins: [] })}>clear</button>}
-        </div>
+      <Field phone={phone} label="Venue" value={view.venue} opts={['all', 'hl', 'perpl']} fmt={(v) => (v === 'all' ? 'All' : v === 'hl' ? 'Hyperliquid' : 'Perpl')} onChange={(v) => setView({ ...view, venue: v })} />
+      <Field phone={phone} label="Label" value={view.label} opts={['both', 'consistent', 'asymmetric']} fmt={(v) => (v === 'both' ? 'Steady, Big winners' : v === 'consistent' ? 'Steady' : 'Big winners')} onChange={(v) => setView({ ...view, label: v })} />
+      <Field phone={phone} label="Min win rate" value={view.minWinRate} opts={WR_OPTS} fmt={(v) => (v ? `${v}%` : 'Any')} onChange={(v) => setView({ ...view, minWinRate: v })} />
+      <Field phone={phone} label="Min profit factor" value={view.minPf} opts={PF_OPTS} fmt={(v) => (v ? String(v) : 'Any')} onChange={(v) => setView({ ...view, minPf: v })} />
+      <Field phone={phone} label="Min trades" value={view.minTrades} opts={TRADES_OPTS} fmt={(v) => String(v)} onChange={(v) => setView({ ...view, minTrades: v })} />
+      <Field phone={phone} label="Min net profit" value={view.minProfit} opts={PROFIT_OPTS} fmt={(v) => (v ? usd(v, false, true) : '$500')} onChange={(v) => setView({ ...view, minProfit: v })} />
+      <Field phone={phone} label="Max drawdown" value={view.maxDd} opts={DD_OPTS} fmt={(v) => (v ? `${v}%` : 'Any')} onChange={(v) => setView({ ...view, maxDd: v })} />
+      <Field phone={phone} label="Max leverage" value={view.maxLev} opts={LEV_OPTS} fmt={(v) => (v ? `${v}x` : 'Any')} onChange={(v) => setView({ ...view, maxLev: v })} />
+      <Field phone={phone} label="Account size" value={view.size} opts={SIZE_OPTS} fmt={(v) => SIZE_LABEL[v]} onChange={(v) => setView({ ...view, size: v })} />
+      <Field phone={phone} label="Hold" value={view.hold} opts={HOLD_OPTS} fmt={(v) => HOLD_LABEL[v]} onChange={(v) => setView({ ...view, hold: v })} />
+      <Field phone={phone} label="Active within" value={view.active} opts={ACTIVE_OPTS} fmt={(v) => ACTIVE_LABEL[v]} onChange={(v) => setView({ ...view, active: v })} />
+      {phone ? (
+        <>
+          <div className="fgroup">
+            <span className="flabel">Coins{view.coins.length ? ` (${view.coins.length})` : ''}</span>
+            <div className="chips ft-coins">
+              {coinChips}
+              {view.coins.length > 0 && <button className="chipbtn" onClick={() => setView({ ...view, coins: [] })}>Clear coins</button>}
+            </div>
+          </div>
+          <div className="fgroup">
+            <span className="flabel">Only show</span>
+            <div className="chips">
+              <button className="chipbtn" aria-pressed={view.perplOnly} onClick={() => setView({ ...view, perplOnly: !view.perplOnly })}>Perpl-listed only</button>
+              <button className="chipbtn" aria-pressed={view.hideSmall} onClick={() => setView({ ...view, hideSmall: !view.hideSmall })}>Hide small accounts (under $500 profit)</button>
+            </div>
+          </div>
+          <button className="btn" onClick={() => setView(FT_DEFAULT)} disabled={!canReset}>Reset filters</button>
+        </>
+      ) : (
+        <>
+          <button className="pill" aria-pressed={view.coins.length > 0} onClick={() => setCoinsOpen((o) => !o)}><b>Coins</b><span className="v">{view.coins.length ? view.coins.join(', ') : 'Any'} ▾</span></button>
+          <button className="pill" aria-pressed={view.perplOnly} onClick={() => setView({ ...view, perplOnly: !view.perplOnly })}><b>Perpl-listed only</b></button>
+          <button className="btn" onClick={() => setView(FT_DEFAULT)} disabled={!canReset}>Reset</button>
+          {coinsOpen && (
+            <div className="coinbox" style={{ width: '100%' }}>
+              {coinChips}
+              {view.coins.length > 0 && <button onClick={() => setView({ ...view, coins: [] })}>clear</button>}
+            </div>
+          )}
+        </>
       )}
     </>
   );

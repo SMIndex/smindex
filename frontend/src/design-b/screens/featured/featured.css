@@ -41,6 +41,9 @@
 .dsb .ft .ft-count { margin-left: auto; display: inline-flex; align-items: center; gap: 14px; }
 .dsb .ft .ft-count label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .dsb .ft .coinbox { display: flex; flex-wrap: wrap; gap: 6px; }
+/* phone filter sheet (portalled outside .ft): the coin list scrolls inside a capped box */
+.dsb .msheet-body .ft-coins { max-height: 176px; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 2px; border: 1px solid var(--line); border-radius: 10px; }
+.dsb .msheet-body .ft-coins .chipbtn { min-height: 36px; padding: 4px 11px; }
 .dsb .ft .coinbox button { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .dsb .ft .coinbox button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 
