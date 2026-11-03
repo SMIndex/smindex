@@ -405,6 +405,12 @@ async def perpl_apikey_enroll(
     }
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(f"{settings.PERPL_REST_URL}/api/v1/api-key/enroll", json=body)
+        if resp.status_code == 404:
+            # Perpl docs: 404 = no profile / no on-chain exchange account for this wallet.
+            # Proven 2026-11-03 with a fresh wallet (account id 0): the enroll call returns a bare "Not Found".
+            raise HTTPException(status_code=404, detail=(
+                f"Perpl has no account for this wallet ({user.wallet_address[:6]}...{user.wallet_address[-4:]}) yet. "
+                "Open app.perpl.xyz with this wallet, deposit once to create your Perpl account, then come back and create the key."))
         if resp.status_code == 409:
             raise HTTPException(status_code=409, detail="This key is already registered on Perpl.")
         if resp.status_code == 423:

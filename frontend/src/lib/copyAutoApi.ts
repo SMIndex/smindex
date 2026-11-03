@@ -37,7 +37,9 @@ export type KeyStatus = { present: boolean; public_key?: string; scope?: number;
 
 export const getAvailability = (leader: string) =>
   api.get(`/api/copy-auto/availability/${leader}`).then((r) => r.data as {
-    available: boolean; reason: string; allowlisted: boolean; key: KeyStatus; live_switch_on: boolean });
+    available: boolean; reason: string; allowlisted: boolean; key: KeyStatus; live_switch_on: boolean;
+    // on-chain Perpl account id of the signed-in wallet: 0 = no Perpl account (Perpl refuses a key), null = unknown
+    perpl_account_id?: number | null });
 export const getPresets = () => api.get('/api/copy-auto/presets').then((r) => r.data as {
   presets: Record<string, Partial<AutoCopySettings>>; defaults: AutoCopySettings;
   ranges: Record<string, [number, number]>; summaries: Record<string, string> });

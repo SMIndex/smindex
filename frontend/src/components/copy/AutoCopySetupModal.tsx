@@ -70,6 +70,8 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
   const set = (k: keyof AutoCopySettings, v: any) => form && setForm({ ...form, [k]: v });
   const summary = useMemo(() => (form ? summarySentence(form) : ''), [form]);
   const keyPresent = !!avail.data?.key?.present;
+  // Perpl only issues API keys to wallets that already have a Perpl account (deposit made once).
+  const noPerplAccount = avail.data?.perpl_account_id === 0;
 
   const connectWallet = async (c: (typeof connectors)[number]) => {
     setErr(null); setBusy('connect');
@@ -206,10 +208,17 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
           {avail.data && !avail.data.live_switch_on && (
             <p className="text-[11px] text-warning mt-1">Live auto-copy is switched off on the server right now; Live subscriptions only log until it is enabled.</p>
           )}
-          {avail.data && !keyPresent && (
+          {avail.data && !keyPresent && !noPerplAccount && (
             <p className="text-[11px] text-text-secondary mt-1">
               <b>Live is greyed out</b> because this wallet has no Perpl auto-copy key yet. Tick the box below and press
               "Create auto-copy key" (your wallet signs once); Live becomes selectable right after. Shadow needs no key.
+            </p>
+          )}
+          {avail.data && !keyPresent && noPerplAccount && (
+            <p className="text-[11px] text-warning mt-1">
+              <b>Live is greyed out</b> because the signed-in wallet ({shortenAddress(address)}) has <b>no Perpl account</b>, so Perpl will not
+              issue it an auto-copy key. Open <a href="https://app.perpl.xyz" target="_blank" rel="noreferrer" className="underline">app.perpl.xyz</a> with
+              this wallet, deposit once, then come back. Shadow works without a Perpl account.
             </p>
           )}
           {userSettings.data && userSettings.data.enabled === false && (
@@ -239,7 +248,14 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
                 need your wallet signature. The key is stored encrypted on SMINDEX servers, used only by the auto-copy worker, never shown
                 again, and you can delete it here in one tap (or revoke it at app.perpl.xyz/apikeys). Your wallet signs once to create it.
               </p>
-              {!walletConnected && (
+              {noPerplAccount && (
+                <div className="px-3 py-2 rounded-lg bg-danger/10 border border-danger/30 text-[12px] text-danger">
+                  This wallet ({shortenAddress(address)}) has no Perpl account yet, so Perpl refuses to create a key for it. Open
+                  {' '}<a href="https://app.perpl.xyz" target="_blank" rel="noreferrer" className="underline">app.perpl.xyz</a> with this wallet
+                  and deposit once; the account is created on that first deposit. Then reopen this dialog and create the key.
+                </div>
+              )}
+              {!walletConnected && !noPerplAccount && (
                 <div className="px-3 py-2 rounded-lg bg-warning/10 border border-warning/30 text-[12px] text-warning space-y-2">
                   <div>Your wallet is not connected in this tab (you are signed in from a saved session). The key needs one wallet signature, so connect it first:</div>
                   <div className="flex flex-wrap gap-2">
@@ -261,12 +277,13 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
                 <input type="checkbox" className="mt-0.5 w-5 h-5" checked={consent} onChange={() => setConsent(!consent)} />
                 I understand this key lets SMINDEX place and cancel orders on my Perpl account for auto-copy.
               </label>
-              <button onClick={createKey} disabled={!consent || !walletConnected || walletMismatch || busy === 'key'}
+              <button onClick={createKey} disabled={!consent || !walletConnected || walletMismatch || noPerplAccount || busy === 'key'}
                       className="text-xs px-3 py-2 rounded-lg bg-accent/15 text-accent border border-accent/30 min-h-[44px] disabled:opacity-50">
                 {busy === 'key' ? 'Waiting for wallet…' : 'Create auto-copy key'}
               </button>
-              {!consent && <p className="text-[11px] text-text-secondary">Tick the box above to enable this button.</p>}
-              {consent && !walletConnected && <p className="text-[11px] text-text-secondary">Connect your wallet (above) to enable this button.</p>}
+              {noPerplAccount && <p className="text-[11px] text-text-secondary">Disabled until this wallet has a Perpl account (see above).</p>}
+              {!noPerplAccount && !consent && <p className="text-[11px] text-text-secondary">Tick the box above to enable this button.</p>}
+              {!noPerplAccount && consent && !walletConnected && <p className="text-[11px] text-text-secondary">Connect your wallet (above) to enable this button.</p>}
               {err && busy !== 'save' && <div className="px-3 py-2 rounded-lg bg-danger/10 border border-danger/30 text-[12px] text-danger">{err}</div>}
             </>
           )}

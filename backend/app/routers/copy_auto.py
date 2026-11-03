@@ -108,8 +108,20 @@ async def availability(leader: str, user: User = Depends(get_authenticated_user)
         ok, reason = False, "auto-copy is allowlist-only for now"
     if leader.lower() == user.wallet_address.lower():
         ok, reason = False, "you cannot auto-copy yourself"
+    # Perpl refuses an API key for a wallet with no exchange account (404). Read the
+    # on-chain account id so the modal can say so before asking for a signature.
+    # Same 4 s cap as the Discover execution context; None = unknown (fail open).
+    perpl_account_id = None
+    try:
+        import asyncio
+        from app.services.chain_reader import get_perpl_account_id
+        perpl_account_id = await asyncio.wait_for(
+            asyncio.to_thread(get_perpl_account_id, user.wallet_address), timeout=4.0)
+    except Exception:
+        perpl_account_id = None
     return {"available": ok, "reason": reason, "allowlisted": allow,
-            "key": await keys.status(user.id), "live_switch_on": engine.live_switch_on()}
+            "key": await keys.status(user.id), "live_switch_on": engine.live_switch_on(),
+            "perpl_account_id": perpl_account_id}
 
 
 @router.get("/presets")
