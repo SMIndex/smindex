@@ -76,3 +76,16 @@ async def copy_event(wallet: str, kind: str, message: str, dedupe_key: str | Non
     """kind: copy_trade | copy_skipped | copy_failed | copy_paused."""
     await gateway.send_alert(alert_type=kind, message=message, wallet=wallet,
                              dedupe_key=dedupe_key, dedupe_hours=1 if dedupe_key else 0)
+    # Admin channel (owner 2026-11-03): failures and auto-pauses also go to the
+    # admin chat, straight to the queue, not through any user's preferences.
+    if kind in ("copy_failed", "copy_paused"):
+        try:
+            from app.config import settings
+            from app.services import telegram_queue
+            chat = (settings.ADMIN_TELEGRAM_CHAT_ID or "").strip()
+            if chat:
+                short = f"{wallet[:6]}...{wallet[-4:]}" if wallet else "?"
+                telegram_queue.enqueue(chat, f"<b>[admin] auto-copy {kind.split('_', 1)[1]}</b> user <code>{short}</code>\n{message}",
+                                       dedupe_key=f"admin:{kind}:{dedupe_key}" if dedupe_key else None)
+        except Exception:
+            logger.exception("admin copy of %s failed", kind)

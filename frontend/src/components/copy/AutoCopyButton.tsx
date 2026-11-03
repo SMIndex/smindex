@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { clsx } from 'clsx';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/components/common/Toast';
-import { getAvailability } from '@/lib/copyAutoApi';
+import { getAvailability, getAutoSettings } from '@/lib/copyAutoApi';
 import AutoCopySetupModal from '@/components/copy/AutoCopySetupModal';
 
 // "Auto-copy" next to "Copy" on trader profile + Discover cards (spec 2.11).
@@ -20,6 +20,10 @@ export default function AutoCopyButton({ leaderWallet, leaderName, className }: 
   // focus or click). It used to ask for every row on mount: ~50 requests per
   // Discover load, 9.9 s each on average while they queued (2026-10-12).
   const [asked, setAsked] = useState(false);
+  // Closed test (owner 2026-11-03): the server decides who sees Auto-copy at all.
+  // One shared query per page; nothing renders for signed-out users or until the answer is in.
+  const vis = useQuery({ queryKey: ['copy-auto-settings'], queryFn: getAutoSettings, enabled: !!isAuthenticated, staleTime: 60_000 });
+  const visible = !!isAuthenticated && vis.data?.ui_visible === true;
   const avail = useQuery({
     queryKey: ['copy-auto-avail', leaderWallet],
     queryFn: () => getAvailability(leaderWallet),
@@ -39,6 +43,7 @@ export default function AutoCopyButton({ leaderWallet, leaderName, className }: 
     if (d?.available) setOpen(true);
     else toast.error(d?.reason ? `Auto-copy unavailable: ${d.reason}` : 'Could not check auto-copy right now. Try again.');
   };
+  if (!visible) return null;
   return (
     <>
       <button

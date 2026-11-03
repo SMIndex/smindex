@@ -129,7 +129,6 @@ export default function MobileTraderProfile({ wallet, timeframe = 'all', exchang
         <button className="mc-btn" onClick={() => onWatchToggle(wallet)} style={isWatched ? { color: 'var(--accent-2)' } : undefined}>
           {isWatched ? 'Watching' : 'Watch'}
         </button>
-        <button className="mc-btn mc-btn-copy" onClick={() => onSetupCopy(wallet, detail?.profile?.display_name ?? null)}>Set up copy</button>
       </div>
     </div>,
     portalRoot(),

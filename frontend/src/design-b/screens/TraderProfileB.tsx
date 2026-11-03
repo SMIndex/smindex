@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useTrader, useWatchlist, useSubscriptions } from '@/hooks/useCopyV1';
-import StartPaperCopyModal from '@/components/copy/StartPaperCopyModal';
-import LiveCopyModal, { type LiveCopyPosition } from '@/components/copy/LiveCopyModal';
 import Sparkline from '@/components/copy/Sparkline';
 import OpenDuration, { formatOpenedDate } from '@/components/copy/OpenDuration';
 import { MARKETS } from '@/config/constants';
@@ -40,8 +38,6 @@ export default function TraderProfileB() {
   const { detail, stats, positions, positionsError, equity, loading, error, hlState, hlError, hlPending } = useTrader(wallet, tf, exchange);
   const watchlist = useWatchlist(isAuthenticated);
   const subs = useSubscriptions(isAuthenticated);
-  const [showCopy, setShowCopy] = useState(false);
-  const [liveCopyTarget, setLiveCopyTarget] = useState<LiveCopyPosition | null>(null);
 
   if (!wallet) return null;
   const watched = watchlist.isWatched(wallet, exchange);
@@ -82,7 +78,6 @@ export default function TraderProfileB() {
             </div>
           )}
           <button className="btn" aria-pressed={watched} onClick={toggleWatch}>{watched ? 'Watching' : 'Watch'}</button>
-          <button className="btn primary" onClick={() => setShowCopy(true)}>Set up copy</button>
           {isHl && <AutoCopyButton leaderWallet={wallet} className="btn" />}
         </div>
       </div>
@@ -147,7 +142,7 @@ export default function TraderProfileB() {
           <div className="card" style={{ marginTop: 16 }}>
             <h2>Open positions</h2>
             <div className="sub">{isHl
-              ? 'Live from Hyperliquid. Copy places the order on Perpl, for markets Perpl lists.'
+              ? 'Live from Hyperliquid. Auto-copy mirrors new trades on Perpl, for markets Perpl lists.'
               : 'Read from chain. Take profit and stop loss are not public on Perpl.'}</div>
             {isHl ? (
               posLoading ? (
@@ -179,17 +174,7 @@ export default function TraderProfileB() {
                             <td className="r">{p.leverage}x</td>
                             <td style={{ whiteSpace: 'nowrap' }}>{p.opened_at ? formatOpenedDate(p.opened_at) : '-'}{p.opened_at ? <>, <OpenDuration openedAt={p.opened_at} /></> : null}</td>
                             <td className={`r amt ${p.unrealized_pnl >= 0 ? 'long-c' : 'short-c'}`}>{formatCompact(p.unrealized_pnl)}</td>
-                            <td className="r">
-                              {mid != null ? (
-                                <button className="btn sm primary" onClick={() => setLiveCopyTarget({
-                                  market_id: mid, symbol: p.coin, side: p.side,
-                                  entry_price: p.entry_px, mark_price: p.mark_px,
-                                  leverage: p.leverage, size: p.size, unrealized_pnl: p.unrealized_pnl, venue: 'hl',
-                                  opened_at: p.opened_at, opened_before: p.opened_before,
-                                  tp_px: p.tp_px, sl_px: p.sl_px, has_tpsl: p.has_tpsl,
-                                })}>Copy</button>
-                              ) : <span className="dim" style={{ fontSize: 12 }}>Not on Perpl</span>}
-                            </td>
+                            <td className="r">{mid == null && <span className="dim" style={{ fontSize: 12 }}>Not on Perpl</span>}</td>
                           </tr>
                         );
                       })}
@@ -223,13 +208,7 @@ export default function TraderProfileB() {
                           <td className="r">{p.leverage}x</td>
                           <td style={{ whiteSpace: 'nowrap' }}>{p.opened_at ? formatOpenedDate(p.opened_at) : '-'}{p.opened_at ? <>, <OpenDuration openedAt={p.opened_at} /></> : null}</td>
                           <td className={`r amt ${p.pnl >= 0 ? 'long-c' : 'short-c'}`}>{formatCompact(p.pnl)}</td>
-                          <td className="r">
-                            <button className="btn sm primary" onClick={() => setLiveCopyTarget({
-                              market_id: p.market_id, symbol: p.symbol, side: p.side,
-                              entry_price: p.entry_price, mark_price: p.mark_price,
-                              leverage: p.leverage, size: p.size, venue: 'perpl', opened_at: p.opened_at,
-                            })}>Copy</button>
-                          </td>
+                          <td className="r" />
                         </tr>
                       );
                     })}
@@ -241,25 +220,6 @@ export default function TraderProfileB() {
         </div>
       </div>
 
-      {showCopy && (
-        <StartPaperCopyModal
-          isOpen={showCopy}
-          onClose={() => setShowCopy(false)}
-          traderWallet={wallet}
-          traderName={detail?.profile?.display_name}
-          onSubmit={subs.create}
-        />
-      )}
-
-      {liveCopyTarget && (
-        <LiveCopyModal
-          isOpen={!!liveCopyTarget}
-          onClose={() => setLiveCopyTarget(null)}
-          traderWallet={wallet}
-          traderName={detail?.profile?.display_name}
-          position={liveCopyTarget}
-        />
-      )}
     </div>
   );
 }

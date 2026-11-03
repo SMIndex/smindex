@@ -3,11 +3,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { useWatchlist } from '@/hooks/useCopyV1';
 import { useMarkets } from '@/hooks/useMarkets';
 import AutoCopyButton from '@/components/copy/AutoCopyButton';
-import LiveCopyModal, { type LiveCopyPosition } from '@/components/copy/LiveCopyModal';
 import { getFeaturedWallet, getReplay, type ClosedTrade, type FeaturedRow, type OpenPosition, type Replay, type WalletDetail } from '@/lib/featuredApi';
 import { agoWords, holdWords, labelWords, pct, price, shortAddr, usd } from '@/lib/featuredView';
 import { Arrow, Drawer, LabelChips, LiveDot, VenueBadge } from './bits';
-import FeaturedCopySheet from './FeaturedCopySheet';
 
 // Wallet detail drawer (design/WalletDetail.dc.html), same drawer on phone.
 
@@ -78,8 +76,6 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showAll, setShowAll] = useState(false);
-  const [copyOpen, setCopyOpen] = useState(false);
-  const [mirror, setMirror] = useState<LiveCopyPosition | null>(null);
   const [margin, setMargin] = useState(50);
   const [lev, setLev] = useState(3);
   const [stop, setStop] = useState<number | null>(null);
@@ -124,12 +120,6 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
     if (watched) await watchlist.unwatch(row.wallet, row.venue); else await watchlist.watch(row.wallet, row.venue);
   };
   const marketFor = (coin: string) => activeMarkets.find((m) => m.symbol.toUpperCase() === coin.toUpperCase());
-  const mirrorPos = (p: OpenPosition) => {
-    const m = marketFor(p.coin);
-    if (!m) return;
-    setMirror({ market_id: m.market_id, symbol: m.symbol, side: p.side, entry_price: p.entry ?? p.mark ?? 0, mark_price: p.mark ?? p.entry ?? 0,
-      leverage: p.leverage ?? 1, size: p.size, unrealized_pnl: p.unrealized, venue: row.venue });
-  };
   const trades: ClosedTrade[] = d?.closed_trades ?? [];
   const weekly = d?.weekly ?? [];
   const maxWeek = Math.max(1, ...weekly.map((w) => Math.abs(w.pnl)));
@@ -157,7 +147,6 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
           </div>
         </div>
         <div className="dacts">
-          <button className="btn primary" onClick={() => setCopyOpen(true)}>Copy this trader</button>
           <button className="btn" aria-pressed={watched} onClick={toggleWatch} disabled={!isAuthenticated} title={isAuthenticated ? '' : 'Sign in to watch'}>{watched ? 'Watching' : 'Watch'}</button>
           {row.venue === 'hl' && <AutoCopyButton leaderWallet={row.wallet} leaderName={row.display_name ?? undefined} className="btn" />}
           <button className="btn" aria-label="Close" onClick={onClose}>✕</button>
@@ -243,7 +232,7 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
         <div style={{ overflowX: 'auto', marginTop: 8 }}>
           {(d?.open_positions?.length ?? 0) === 0 ? <div className="sub">No open position{d?.positions_at ? '' : ' read yet (the trades feed reads it within seconds of the first trade)'}.</div> : (
             <table className="ft-table">
-              <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unrealized</th><th>Lev</th><th>Liquidation</th><th></th></tr></thead>
+              <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unrealized</th><th>Lev</th><th>Liquidation</th><th>On Perpl</th></tr></thead>
               <tbody>
                 {d!.open_positions.map((p) => {
                   const away = p.liq_px && p.mark ? Math.abs(p.liq_px - p.mark) / p.mark * 100 : null;
@@ -255,7 +244,7 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
                       <td className={p.unrealized >= 0 ? 'pos' : 'neg'}>{usd(p.unrealized, true)}{p.roe != null ? ` (${(p.roe * 100).toFixed(1)}%)` : ''}</td>
                       <td>{p.leverage ? `${p.leverage}x` : 'n/a'}</td>
                       <td className="mono">{price(p.liq_px)}{away != null && <span className="sub"> ({away.toFixed(0)}% away)</span>}</td>
-                      <td>{m ? <button className="btn" style={{ height: 28 }} onClick={() => mirrorPos(p)}>Mirror at my size</button> : <span className="sub">not on Perpl</span>}</td>
+                      <td className="sub">{m ? 'yes' : 'not on Perpl'}</td>
                     </tr>
                   );
                 })}
@@ -306,10 +295,6 @@ export default function FeaturedWalletDrawer({ row, onClose, liveAt }: { row: Fe
         {d?.identity?.sub_accounts?.length ? <div className="sub" style={{ marginTop: 8 }}>Sub-accounts folded into this record: {d.identity.sub_accounts.map(shortAddr).join(', ')}</div> : null}
       </div>
 
-      {copyOpen && d && <FeaturedCopySheet row={row} defaults={d.replay_defaults} replay={rep} onClose={() => setCopyOpen(false)} />}
-      {mirror && (
-        <LiveCopyModal isOpen onClose={() => setMirror(null)} traderWallet={row.wallet} traderName={row.display_name} position={mirror} />
-      )}
       {!address && null}
     </Drawer>
   );

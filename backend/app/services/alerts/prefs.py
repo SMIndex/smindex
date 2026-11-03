@@ -57,7 +57,9 @@ ALERT_TYPES: dict[str, dict] = {
     },
     "watched_wallet": {
         "group": "smart_money", "label": "A watched wallet opens or closes", "default": True,
-        "params": {"min_notional_usd": 50000},
+        # 0 = every open and close (owner 2026-11-03: the old $50,000 floor silently
+        # dropped a followed wallet's $120 trade). Users can raise it in Settings.
+        "params": {"min_notional_usd": 0},
         "delay": "Seconds for live-tracked wallets; up to about 20 min for the rest.",
     },
     "crowded_trade": {

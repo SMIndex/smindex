@@ -3,8 +3,8 @@ import { getHlBasis, getAdminMe, adminHideTrader, adminUnhideTrader, getTraderHl
 import { clsx } from 'clsx';
 import { useTrader } from '@/hooks/useCopyV1';
 import Sparkline from '@/components/copy/Sparkline';
-import StartPaperCopyModal from '@/components/copy/StartPaperCopyModal';
-import LiveCopyModal, { type LiveCopyPosition } from '@/components/copy/LiveCopyModal';
+import AutoCopyButton from '@/components/copy/AutoCopyButton';
+import type { LiveCopyPosition } from '@/components/copy/LiveCopyModal';
 import OpenDuration, { formatOpenedDate, openedDateLabel, OpenDurationOrBound } from '@/components/copy/OpenDuration';
 import { MARKETS } from '@/config/constants';
 import type { CreateSubscriptionPayload, CopySubscription, EquityTimeframe, HlProfileState, HlPosition, HlTpslOrder } from '@/lib/copyApi';
@@ -94,7 +94,7 @@ export default function TraderProfileModal({ wallet, timeframe = '7d', exchange 
                 {hidden ? 'Unhide' : 'Hide'}
               </button>
             )}
-            <button onClick={() => setShowCopy(true)} className="rd-btn-primary text-[12px] px-3 py-2">Set up copy</button>
+            {isHl && <AutoCopyButton leaderWallet={wallet} leaderName={detail?.profile?.display_name ?? undefined} className="rd-btn-primary text-[12px] px-3 py-2" />}
             <button onClick={onClose} className="rd-btn-ghost w-9 h-9 flex items-center justify-center text-lg" aria-label="Close">×</button>
           </div>
         </div>
@@ -125,8 +125,7 @@ export default function TraderProfileModal({ wallet, timeframe = '7d', exchange 
 
           {/* Positions */}
           {isHl ? (
-            <HlSection state={hlState} error={hlError} loading={loading || hlPending}
-              onCopy={(p) => setLiveTarget({ market_id: p.perpl_market_id!, symbol: p.coin, side: p.side, entry_price: p.entry_px, mark_price: p.mark_px, leverage: p.leverage, size: p.size, unrealized_pnl: p.unrealized_pnl, venue: 'hl', opened_at: p.opened_at, opened_before: p.opened_before, tp_px: p.tp_px, sl_px: p.sl_px, has_tpsl: p.has_tpsl })} />
+            <HlSection state={hlState} error={hlError} loading={loading || hlPending} />
           ) : (
           <div>
             {/* Label fix (Wallet Explorer Part 3): resting TP/SL ARE decoded
@@ -172,9 +171,7 @@ export default function TraderProfileModal({ wallet, timeframe = '7d', exchange 
                           <td className="py-2.5 px-2 tabular-nums whitespace-nowrap" style={{ color: 'var(--dim)' }}>{formatOpenedDate(p.opened_at)}</td>
                           <td className="py-2.5 px-2" style={{ color: 'var(--dim)' }}><OpenDuration openedAt={p.opened_at} /></td>
                           <td className="py-2.5 px-2 tabular-nums font-semibold" style={{ color: p.pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatCompact(p.pnl)}</td>
-                          <td className="py-2.5 px-2">
-                            <button onClick={() => setLiveTarget({ market_id: p.market_id, symbol: p.symbol, side: p.side, entry_price: p.entry_price, mark_price: p.mark_price, leverage: p.leverage, size: p.size, venue: 'perpl', opened_at: p.opened_at })} className="rd-btn-primary text-[11px] px-2.5 py-1">Copy</button>
-                          </td>
+                          <td className="py-2.5 px-2" />
                         </tr>
                       );
                     })}
@@ -191,12 +188,6 @@ export default function TraderProfileModal({ wallet, timeframe = '7d', exchange 
         </div>
       </div>
 
-      {showCopy && (
-        <StartPaperCopyModal isOpen={showCopy} onClose={() => setShowCopy(false)} traderWallet={wallet} traderName={detail?.profile?.display_name} exchange={exchange} onSubmit={onCreateSub} />
-      )}
-      {liveTarget && (
-        <LiveCopyModal isOpen={!!liveTarget} onClose={() => setLiveTarget(null)} traderWallet={wallet} traderName={detail?.profile?.display_name} position={liveTarget} />
-      )}
     </div>
   );
 }
@@ -402,7 +393,7 @@ export function HistoryDrawer({ h, ageSec }: { h: HlPositionHistory; ageSec: num
 
 function HlSection({ state, error, loading, onCopy }: {
   state: HlProfileState | null; error: boolean; loading: boolean;
-  onCopy: (p: HlPosition) => void;
+  onCopy?: (p: HlPosition) => void;
 }) {
   // Cross-venue basis (phase 5): HL mid vs Perpl mark for mapped markets.
   const [basis, setBasis] = useState<HlBasisRow[]>([]);
@@ -535,7 +526,7 @@ function HlSection({ state, error, loading, onCopy }: {
                     </td>
                     <td className="py-2.5 px-2 tabular-nums" style={{ color: 'var(--dim)' }}>{p.rr != null ? p.rr + ':1' : '-'}</td>
                     <td className="py-2.5 px-2">
-                      {!unmapped && (
+                      {!unmapped && onCopy && (
                         <button onClick={() => onCopy(p)} className="rd-btn-primary text-[11px] px-2.5 py-1">Copy</button>
                       )}
                     </td>

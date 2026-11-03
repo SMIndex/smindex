@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useTraders, useWatchlist, useSubscriptions } from '@/hooks/useCopyV1';
-import StartPaperCopyModal from '@/components/copy/StartPaperCopyModal';
 import Sparkline from '@/components/copy/Sparkline';
 import { getEquityBatch, getExchanges, type ExchangeInfo, type TraderListItem, type EquityTimeframe } from '@/lib/copyApi';
 import { useCopyStore } from '@/stores/copyStore';
@@ -157,7 +156,6 @@ export default function DiscoverB() {
   }, [exchange]);
   const [activeProfitable, setActiveProfitable] = useState(false);
   const [search, setSearch] = useState('');
-  const [copyTarget, setCopyTarget] = useState<TraderListItem | null>(null);
 
   const onWatch = async (w: string) => {
     if (!isAuthenticated) return;
@@ -410,7 +408,6 @@ export default function DiscoverB() {
                         <button className="btn sm" aria-pressed={watchlist.isWatched(t.wallet_address, exchange)} onClick={() => onWatch(t.wallet_address)}>
                           {watchlist.isWatched(t.wallet_address, exchange) ? 'Watching' : 'Watch'}
                         </button>
-                        <button className="btn sm primary" onClick={() => setCopyTarget(t)}>Copy</button>
                         {exchange === 'hl' && <AutoCopyButton leaderWallet={t.wallet_address} className="btn sm" />}
                       </div>
                     </td>
@@ -457,7 +454,7 @@ export default function DiscoverB() {
                   <button className="btn sm" aria-pressed={watchlist.isWatched(t.wallet_address, exchange)} onClick={() => onWatch(t.wallet_address)}>
                     {watchlist.isWatched(t.wallet_address, exchange) ? 'Watching' : 'Watch'}
                   </button>
-                  <button className="btn sm primary" onClick={() => setCopyTarget(t)}>Copy</button>
+                  {exchange === 'hl' && <AutoCopyButton leaderWallet={t.wallet_address} className="btn sm" />}
                 </div>
               </div>
             );
@@ -465,16 +462,6 @@ export default function DiscoverB() {
         </div>
       )}
 
-      {copyTarget && (
-        <StartPaperCopyModal
-          isOpen={!!copyTarget}
-          onClose={() => setCopyTarget(null)}
-          traderWallet={copyTarget.wallet_address}
-          traderName={copyTarget.display_name}
-          exchange={exchange}
-          onSubmit={subs.create}
-        />
-      )}
     </div>
   );
 }

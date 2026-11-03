@@ -24,6 +24,14 @@ def _allowlisted(user: User) -> bool:
     return settings.live_allowlist_ok(user.wallet_address.lower())
 
 
+PREVIEW_MSG = "Auto-copy is in a closed test right now and will open to everyone once it is verified."
+
+
+def _visible(user: User) -> bool:
+    """Auto-copy preview gate (settings.AUTO_COPY_PREVIEW_WALLETS): admins and listed wallets."""
+    return settings.auto_copy_visible(user.wallet_address)
+
+
 def _clean(fields: dict) -> dict:
     out = {}
     for k in EDITABLE:
@@ -81,6 +89,8 @@ async def key_status(user: User = Depends(get_authenticated_user)) -> dict:
 async def key_deposit(req: KeyDeposit, user: User = Depends(get_authenticated_user)) -> dict:
     if not req.consent:
         raise HTTPException(400, "consent required")
+    if not _visible(user):
+        raise HTTPException(403, PREVIEW_MSG)
     if not _allowlisted(user):
         raise HTTPException(403, "Auto-copy is allowlist-only for now")
     try:
@@ -108,6 +118,9 @@ async def availability(leader: str, user: User = Depends(get_authenticated_user)
         ok, reason = False, "auto-copy is allowlist-only for now"
     if leader.lower() == user.wallet_address.lower():
         ok, reason = False, "you cannot auto-copy yourself"
+    visible = _visible(user)
+    if not visible:
+        ok, reason = False, PREVIEW_MSG
     # Perpl refuses an API key for a wallet with no exchange account (404). Read the
     # on-chain account id so the modal can say so before asking for a signature.
     # Same 4 s cap as the Discover execution context; None = unknown (fail open).
@@ -119,7 +132,7 @@ async def availability(leader: str, user: User = Depends(get_authenticated_user)
             asyncio.to_thread(get_perpl_account_id, user.wallet_address), timeout=4.0)
     except Exception:
         perpl_account_id = None
-    return {"available": ok, "reason": reason, "allowlisted": allow,
+    return {"available": ok, "reason": reason, "allowlisted": allow, "ui_visible": visible,
             "key": await keys.status(user.id), "live_switch_on": engine.live_switch_on(),
             "perpl_account_id": perpl_account_id}
 
@@ -152,7 +165,8 @@ async def _settings_payload(user: User) -> dict:
     live_on = engine.live_switch_on()
     return {**st, "platform_live_on": live_on,
             "platform_paused": bool(st["enabled"] and not live_on),
-            "allowlisted": _allowlisted(user), "key": await keys.status(user.id),
+            "allowlisted": _allowlisted(user), "ui_visible": _visible(user),
+            "key": await keys.status(user.id),
             "presets": rules.PRESETS, "ranges": rules.RANGES}
 
 
@@ -212,6 +226,8 @@ async def list_subs(user: User = Depends(get_authenticated_user)) -> dict:
 @router.post("/subs")
 async def create_sub(req: SubCreate, user: User = Depends(get_authenticated_user)) -> dict:
     from app.services.hyperliquid import tracker
+    if not _visible(user):
+        raise HTTPException(403, PREVIEW_MSG)
     if not _allowlisted(user):
         raise HTTPException(403, "Auto-copy is allowlist-only for now")
     leader = req.leader_wallet.lower()

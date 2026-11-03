@@ -151,12 +151,6 @@ function TraderCard({ trader, series, isWatched, onWatchToggle, onStartCopy }: P
           {isWatched ? 'Watching' : 'Watch'}
         </button>
       </div>
-      <button
-        onClick={() => onStartCopy(trader)}
-        className="w-full text-xs font-semibold py-2 rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
-      >
-        Set up Copy
-      </button>
     </div>
   );
 }

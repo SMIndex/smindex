@@ -6,7 +6,6 @@ import { useTraders, useWatchlist, useSubscriptions } from '@/hooks/useCopyV1';
 import CopyLayout from '@/components/copy/CopyLayout';
 import TraderCard from '@/components/copy/TraderCard';
 import TraderListRow, { LIST_GRID } from '@/components/copy/TraderListRow';
-import StartPaperCopyModal from '@/components/copy/StartPaperCopyModal';
 import TraderProfileModal from '@/components/copy/TraderProfileModal';
 import { getEquityBatch, getExchanges, type ExchangeInfo, type TraderListItem, type EquityTimeframe } from '@/lib/copyApi';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -384,16 +383,6 @@ function DesktopDiscover() {
         </div>
       )}
 
-      {copyTarget && (
-        <StartPaperCopyModal
-          isOpen={!!copyTarget}
-          onClose={() => setCopyTarget(null)}
-          traderWallet={copyTarget.wallet_address}
-          traderName={copyTarget.display_name}
-          exchange={exchange}
-          onSubmit={subs.create}
-        />
-      )}
 
       {profileWallet && (
         <TraderProfileModal

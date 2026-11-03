@@ -142,7 +142,6 @@ function TraderListRow({ trader, series, isWatched, onWatchToggle, onStartCopy, 
         >
           {isWatched ? '★' : 'Watch'}
         </button>
-        <button onClick={() => onStartCopy(trader)} className="rd-btn-primary text-[12px] px-3 py-1.5">Copy</button>
         {autoCopy && <AutoCopyButton leaderWallet={trader.wallet_address} className="text-[12px] px-3 py-1.5 rounded-lg border" />}
       </div>
     </div>

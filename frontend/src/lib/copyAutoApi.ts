@@ -39,7 +39,9 @@ export const getAvailability = (leader: string) =>
   api.get(`/api/copy-auto/availability/${leader}`).then((r) => r.data as {
     available: boolean; reason: string; allowlisted: boolean; key: KeyStatus; live_switch_on: boolean;
     // on-chain Perpl account id of the signed-in wallet: 0 = no Perpl account (Perpl refuses a key), null = unknown
-    perpl_account_id?: number | null });
+    perpl_account_id?: number | null;
+    // false = Auto-copy is in the closed test and this wallet is not in it (button hidden)
+    ui_visible?: boolean });
 export const getPresets = () => api.get('/api/copy-auto/presets').then((r) => r.data as {
   presets: Record<string, Partial<AutoCopySettings>>; defaults: AutoCopySettings;
   ranges: Record<string, [number, number]>; summaries: Record<string, string> });
@@ -50,7 +52,7 @@ export const createAutoSub = (leader_wallet: string, preset: string | null, sett
 export type AutoCopyDefaults = Omit<AutoCopySettings, 'markets'> & { mode: 'shadow' | 'live' };
 export type AutoCopyUserSettings = {
   enabled: boolean; defaults: AutoCopyDefaults; updated_at: string | null;
-  platform_live_on: boolean; platform_paused: boolean; allowlisted: boolean; key: KeyStatus;
+  platform_live_on: boolean; platform_paused: boolean; allowlisted: boolean; ui_visible?: boolean; key: KeyStatus;
   presets: Record<string, Partial<AutoCopySettings>>; ranges: Record<string, [number, number]>;
 };
 export const getAutoSettings = () => api.get('/api/copy-auto/settings').then((r) => r.data as AutoCopyUserSettings);

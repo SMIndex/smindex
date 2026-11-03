@@ -111,6 +111,12 @@ async def create_subscription(
     req: CreateSubscriptionRequest,
     user: User = Depends(get_authenticated_user),
 ) -> dict:
+    # Owner 2026-11-03: manual copy (the user confirms each trade by hand) is
+    # retired. Auto-copy places orders; hand trading happens in the Terminal.
+    # Existing rows stay readable; nothing new can be created.
+    raise HTTPException(status_code=410, detail=(
+        "Manual copy has been replaced by Auto-copy. Use the Auto-copy button on a trader; "
+        "to trade by hand, use the Terminal."))
     mode = _resolve_mode(req.copy_type)
     await _validate_markets(req.allowed_markets)
     if req.trader_wallet.lower() == user.wallet_address.lower():

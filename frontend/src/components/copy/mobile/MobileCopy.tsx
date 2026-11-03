@@ -12,7 +12,6 @@ import { formatCompact, formatPercent, shortenAddress } from '@/lib/formatters';
 import Sparkline from '@/components/copy/Sparkline';
 import MobileTraderProfile from '@/components/copy/mobile/MobileTraderProfile';
 import { portalRoot } from '@/design-b/portalRoot';
-import MobileCopySheet from '@/components/copy/mobile/MobileCopySheet';
 
 export type MobileCopyTab = 'discover' | 'watchlist' | 'dashboard';
 
@@ -119,7 +118,6 @@ function TraderCardM({
       </div>
       <div className="mc-tc-actions">
         <button type="button" className="mc-btn" onClick={(e) => { e.stopPropagation(); onProfile(trader.wallet_address); }}>Profile</button>
-        <button type="button" className="mc-btn mc-btn-copy" onClick={(e) => { e.stopPropagation(); onCopy(trader); }}>Set up copy</button>
       </div>
     </div>
   );
@@ -286,15 +284,6 @@ export default function MobileCopy({ initialTab = 'discover' }: Props) {
         />
       )}
 
-      {copyTarget && (
-        <MobileCopySheet
-          traderWallet={copyTarget.wallet}
-          traderName={copyTarget.name}
-          onSubmit={subs.create}
-          onSaved={() => { setCopyTarget(null); showToast(`Copy saved for ${copyTarget.name || shortenAddress(copyTarget.wallet)}`); }}
-          onClose={() => setCopyTarget(null)}
-        />
-      )}
 
       {createPortal(
         <div className={clsx('mc-toast', toast && 'show')}>

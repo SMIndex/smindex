@@ -93,6 +93,22 @@ class Settings(BaseSettings):
     def admin_address_set(self) -> set[str]:
         return {a.strip().lower() for a in self.ADMIN_ADDRESSES.split(",") if a.strip()}
 
+    # Auto-copy preview (owner 2026-11-03): until the request-id fix is proven on
+    # a real copied order, the Auto-copy option is shown to and usable by admins
+    # plus these wallets only. "*" opens it to everyone. Enforced server-side
+    # (availability, subscription create, key deposit); the button only mirrors it.
+    AUTO_COPY_PREVIEW_WALLETS: str = ""
+
+    def auto_copy_visible(self, wallet: str | None) -> bool:
+        if not wallet:
+            return False
+        w = wallet.lower()
+        raw = self.AUTO_COPY_PREVIEW_WALLETS.strip()
+        if raw == "*":
+            return True
+        allowed = {a.strip().lower() for a in raw.split(",") if a.strip()}
+        return w in self.admin_address_set or w in allowed
+
     # --- Strategy engine (docs/strategies, Phase 1) ------------------------
     # Master switch for the perpl-strategy-worker process. Default FALSE.
     # The worker checks this every cycle; `systemctl stop perpl-strategy-worker`

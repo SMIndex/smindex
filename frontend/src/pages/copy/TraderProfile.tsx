@@ -4,9 +4,8 @@ import { clsx } from 'clsx';
 import { useAuth } from '@/hooks/useAuth';
 import { useTrader, useWatchlist, useSubscriptions } from '@/hooks/useCopyV1';
 import CopyLayout from '@/components/copy/CopyLayout';
-import StartPaperCopyModal from '@/components/copy/StartPaperCopyModal';
 import AutoCopyButton from '@/components/copy/AutoCopyButton';
-import LiveCopyModal, { type LiveCopyPosition } from '@/components/copy/LiveCopyModal';
+import type { LiveCopyPosition } from '@/components/copy/LiveCopyModal';
 import Sparkline from '@/components/copy/Sparkline';
 import OpenDuration, { formatOpenedDate } from '@/components/copy/OpenDuration';
 import { MARKETS } from '@/config/constants';
@@ -81,12 +80,6 @@ export default function TraderProfilePage() {
             >
               {watched ? 'Watching' : 'Watch'}
             </button>
-            <button
-              onClick={() => setShowCopy(true)}
-              className="text-xs font-semibold py-2 px-4 rounded-lg bg-accent text-white hover:bg-accent/90 transition-colors"
-            >
-              Set up Copy
-            </button>
             {exchange === 'hl' && wallet && <AutoCopyButton leaderWallet={wallet} />}
           </div>
         </div>
@@ -157,7 +150,6 @@ export default function TraderProfilePage() {
                   <th className="py-2 px-2 font-medium text-right">Opened</th>
                   <th className="py-2 px-2 font-medium text-right">Active</th>
                   <th className="py-2 px-2 font-medium text-right">PnL</th>
-                  <th className="py-2 px-2 font-medium text-right">Copy</th>
                 </tr>
               </thead>
               <tbody>
@@ -174,19 +166,6 @@ export default function TraderProfilePage() {
                       <td className="py-2.5 px-2 text-right tabular-nums text-text-secondary whitespace-nowrap">{formatOpenedDate(p.opened_at)}</td>
                       <td className="py-2.5 px-2 text-right text-text-secondary"><OpenDuration openedAt={p.opened_at} /></td>
                       <td className={clsx('py-2.5 px-2 text-right tabular-nums font-semibold', p.pnl >= 0 ? 'text-success' : 'text-danger')}>{formatCompact(p.pnl)}</td>
-                      <td className="py-2.5 px-2 text-right">
-                        <button
-                          onClick={() => setLiveCopyTarget({
-                            market_id: p.market_id, symbol: p.symbol, side: p.side,
-                            entry_price: p.entry_price, mark_price: p.mark_price,
-                            leverage: p.leverage, size: p.size,
-                            venue: 'perpl', opened_at: p.opened_at,
-                          })}
-                          className="text-[11px] font-semibold px-2.5 py-1 rounded-md bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
-                        >
-                          Copy
-                        </button>
-                      </td>
                     </tr>
                   );
                 })}
@@ -196,25 +175,6 @@ export default function TraderProfilePage() {
         )}
       </div>
 
-      {showCopy && (
-        <StartPaperCopyModal
-          isOpen={showCopy}
-          onClose={() => setShowCopy(false)}
-          traderWallet={wallet}
-          traderName={detail?.profile?.display_name}
-          onSubmit={subs.create}
-        />
-      )}
-
-      {liveCopyTarget && (
-        <LiveCopyModal
-          isOpen={!!liveCopyTarget}
-          onClose={() => setLiveCopyTarget(null)}
-          traderWallet={wallet}
-          traderName={detail?.profile?.display_name}
-          position={liveCopyTarget}
-        />
-      )}
     </CopyLayout>
   );
 }
