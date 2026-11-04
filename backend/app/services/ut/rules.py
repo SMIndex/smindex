@@ -436,6 +436,48 @@ def co_entry_pairs(entries: list[dict], window_ms: int = 60_000) -> list[tuple]:
 
 
 CHANCE_MULT = 5.0           # observed co-entries must be at least this many times what chance predicts
+EDGE_MIN_FINAL = 5          # and at least this many in total once the baseline test is applied
+BASELINE_FLOOR = 1.0        # a day-shift baseline below one co-entry counts as one
+
+
+def day_shift_baselines(entries: list[dict], edges: dict, runs: int = 4, seed: int = 20261104, shift_ms: int = 86_400_000) -> dict:
+    """How many co-entries each edge's pair makes when one wallet's entries
+    are moved by a day (same time of day, same coins, same habits): the
+    co-entries the two produce without being together. `runs` random
+    halvings each shift half the wallets; a pair gets a baseline from the
+    runs that shift exactly one of its two wallets (missed by all runs with
+    probability 1 / 2 ** runs: then None). {(a, b): mean count or None}."""
+    import random
+    wallets = sorted({e["wallet"] for e in entries})
+    base: dict = {k: [] for k in edges}
+    for k in range(runs):
+        rnd = random.Random(seed + k)
+        par = {w: rnd.randint(0, 1) for w in wallets}
+        shifted = [dict(e, time=e["time"] + (shift_ms if par[e["wallet"]] else 0)) for e in entries]
+        mark_crowds(shifted)
+        cnt: dict = {}
+        for p in co_entry_pairs(shifted):
+            if not p[7]:
+                cnt[(p[0], p[1])] = cnt.get((p[0], p[1]), 0) + 1
+        for (a, b) in edges:
+            if par.get(a) != par.get(b):
+                base[(a, b)].append(cnt.get((a, b), 0))
+    return {k: (sum(v) / len(v) if v else None) for k, v in base.items()}
+
+
+def edges_after_baseline(edges: dict, baselines: dict) -> dict:
+    """Keeps an edge when its co-entries are at least EDGE_MIN_FINAL and at
+    least CHANCE_MULT times its day-shift baseline (floor BASELINE_FLOOR);
+    an edge with no baseline must still reach EDGE_MIN_FINAL."""
+    out = {}
+    for k, v in edges.items():
+        bl = baselines.get(k)
+        if v["n"] < EDGE_MIN_FINAL and v["on_event"] < 2:
+            continue
+        if bl is not None and v["n"] < CHANCE_MULT * max(bl, BASELINE_FLOOR):
+            continue
+        out[k] = dict(v, baseline=bl)
+    return out
 
 
 def expected_coentries(counts_a: dict, counts_b: dict, window_ms: int = 60_000, span_ms: int = 90 * 86_400_000) -> float:

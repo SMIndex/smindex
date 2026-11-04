@@ -77,6 +77,31 @@ async def entry_counts(wallets: list[str], since: datetime) -> dict[str, dict]:
     return out
 
 
+async def flagged_edges(flagged: list[str], since: datetime) -> dict:
+    """The co-entry edges among flagged wallets that pass every test: 3 or
+    more co-entries (2 on events), none inside a crowd, at least 5x the
+    analytic chance, at least 5 in total and at least 5x the day-shift
+    baseline. Shared by the cluster build and S6. {(a, b): {n, on_event,
+    expected, baseline}}."""
+    if len(flagged) < 2:
+        return {}
+    sf = get_session_factory()
+    async with sf() as s:
+        pairs = (await s.execute(text(
+            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND crowd = 0 AND wallet_a IN :f AND wallet_b IN :f"
+        ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all()
+        ents = (await s.execute(text(
+            "SELECT wallet, coin, side, time, event_id FROM ut_entries WHERE time >= :a AND wallet IN :f"
+        ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all()
+    counts = await entry_counts(flagged, since)
+    first = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in pairs], counts=counts)
+    if not first:
+        return {}
+    entries = [{"wallet": w, "coin": c, "side": sd, "time": common.ms(t), "event_id": ev} for w, c, sd, t, ev in ents]
+    baselines = rules.day_shift_baselines(entries, first)
+    return rules.edges_after_baseline(first, baselines)
+
+
 async def build(as_of: date | None = None) -> dict:
     as_of = as_of or common.now_utc().date()
     since = common.now_utc() - timedelta(days=common.WINDOW_DAYS)
@@ -91,9 +116,6 @@ async def build(as_of: date | None = None) -> dict:
             await s.execute(text("DELETE FROM ut_clusters WHERE as_of=:d"), {"d": as_of})
             await s.commit()
             return {**co, "clusters": 0, "members": 0}
-        pairs = (await s.execute(text(
-            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND crowd = 0 AND wallet_a IN :f AND wallet_b IN :f"
-        ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all()
         meta = {w: (f, fd, lev) for w, f, fd, lev in (await s.execute(text(
             "SELECT m.wallet, m.funder, m.first_deposit_at, (SELECT ROUND(AVG(leverage),0) FROM round_trips r WHERE r.wallet=m.wallet AND r.venue='hl' "
             "AND r.close_time >= :a) FROM ut_wallet_meta m WHERE m.wallet IN :f").bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all()}
@@ -105,8 +127,7 @@ async def build(as_of: date | None = None) -> dict:
                 "SELECT DISTINCT wallet, event_id FROM ut_entries WHERE time >= :a AND event_id IS NOT NULL AND wallet IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all():
             ev_by_w.setdefault(w, set()).add(int(ev))
-    counts = await entry_counts(flagged, since)
-    co_edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in pairs], counts=counts)
+    co_edges = await flagged_edges(flagged, since)
     edges: dict[tuple[str, str], set[str]] = {k: {"co_entry"} for k in co_edges}
     services = await scores.service_funders()
     by_funder: dict[str, list[str]] = {}
