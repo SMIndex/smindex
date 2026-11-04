@@ -9,7 +9,7 @@ ut_alerts_sent that the API poller sends to the admin chat).
     python scripts/ut.py drift [--top 20]
     python scripts/ut.py validate [--out DIR]
     python scripts/ut.py alerts test
-    python scripts/ut.py run daily|hourly          (the worker's pass, now)
+    python scripts/ut.py run daily|hourly|<step>   (the worker's pass, or one step: coin_stats events entries forward close scores clusters drift)
     python scripts/ut.py status
 """
 import argparse
@@ -230,10 +230,16 @@ async def cmd_alerts_test(args) -> None:
 
 
 async def cmd_run(args) -> None:
+    from app.services.ut import clusters, coin_stats, drift, entries, events, scores
+    steps = {"coin_stats": lambda: coin_stats.build(), "events": lambda: events.build(full=True), "entries": lambda: entries.build_all(),
+             "forward": lambda: entries.compute_forward(), "close": lambda: entries.close_times(), "scores": lambda: scores.build(),
+             "clusters": lambda: clusters.build(), "drift": lambda: drift.build()}
     if args.which == "daily":
         print(json.dumps(await worker.run_daily(), indent=1, default=str))
-    else:
+    elif args.which == "hourly":
         print(json.dumps(await worker.run_hourly(), indent=1, default=str))
+    else:
+        print(json.dumps(await worker._step("ut_" + args.which, steps[args.which]()), indent=1, default=str))
 
 
 async def cmd_status(args) -> None:
@@ -271,7 +277,7 @@ async def main() -> None:
     p = sub.add_parser("drift"); p.add_argument("--top", type=int, default=20)
     p = sub.add_parser("validate"); p.add_argument("--out", default=OUT_DEFAULT)
     p = sub.add_parser("alerts"); p.add_argument("what", choices=["test"])
-    p = sub.add_parser("run"); p.add_argument("which", choices=["daily", "hourly"])
+    p = sub.add_parser("run"); p.add_argument("which", choices=["daily", "hourly", "coin_stats", "events", "entries", "forward", "close", "scores", "clusters", "drift"])
     sub.add_parser("status")
     args = ap.parse_args()
     await database.init_db(settings.DATABASE_URL)
