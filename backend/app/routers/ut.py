@@ -158,7 +158,9 @@ async def wallet(address: str, user: User = Depends(require_featured)) -> dict:
 
 async def _cluster_build(cid: int) -> dict:
     data = await _rows()
-    by = {r["wallet"]: _row_public(r) | {"open_all": r.get("open_all")} for r in data["rows"]}
+    # members below Watch still belong to the cluster: use every scored wallet
+    allrows = await _rows_cache.get("scored", lambda: utapi.build_rows(flagged_only=False))
+    by = {r["wallet"]: _row_public(r) | {"open_all": r.get("open_all")} for r in allrows["rows"]}
     out = await utapi.cluster_detail(cid, by)
     if out is None:
         raise HTTPException(status_code=404, detail="no such cluster")

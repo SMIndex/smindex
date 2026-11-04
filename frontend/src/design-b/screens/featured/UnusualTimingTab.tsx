@@ -400,7 +400,9 @@ function ClusterDrawer({ id, scoresAsOf, onWatch, isWatched }: {
   const maxNot = Math.max(1, ...ms.map((m) => (m.open?.notional ?? 0)));
   const onEvents = c.co_entries.filter((x) => x.event).length;
   const sharedFunder = c.edges.filter((e) => e.shared_funder).length;
-  const summaryTxt = `${n} wallets that entered the same coin on the same side within 60 seconds of each other ${c.co_entries.length} time${c.co_entries.length === 1 ? '' : 's'}, ${onEvents} of those within an hour before a big move.`
+  const summaryTxt = (c.co_entries.length
+    ? `${n} wallets that entered the same coin on the same side within 60 seconds of each other ${c.co_entries.length} time${c.co_entries.length === 1 ? '' : 's'}, ${onEvents} of those within an hour before a big move.`
+    : `${n} wallets linked by their funding, not by co-entries.`)
     + (sharedFunder ? ` ${sharedFunder} pair${sharedFunder > 1 ? 's' : ''} share a funder.` : '')
     + (c.events.length ? ` Together they were early on ${c.events.length} event${c.events.length > 1 ? 's' : ''}.` : '') + ' Treat them as one trader.';
   return (
