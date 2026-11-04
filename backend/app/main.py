@@ -106,6 +106,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # --- Startup ---
     logger.info("Starting Perpl Copy Trading Backend")
+    from app.db import migrate as _mig   # guarded DDL: runs only what information_schema says is missing
 
     # Security guard: never run with the default JWT secret. It signs app tokens
     # AND derives the Perpl-cookie encryption key, a default value forges tokens
@@ -131,12 +132,12 @@ async def lifespan(app: FastAPI):
             ))
             cols = {row[0].lower() for row in existing.fetchall()}
             if cols and "expires_at" not in cols:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE mcp_tokens ADD COLUMN expires_at DATETIME NULL"
                 ))
                 logger.info("mcp_tokens.expires_at added")
             if cols and "scopes" not in cols:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE mcp_tokens ADD COLUMN scopes VARCHAR(128) NULL"
                 ))
                 logger.info("mcp_tokens.scopes added")
@@ -172,18 +173,18 @@ async def lifespan(app: FastAPI):
                 }
                 for col, ddl in add.items():
                     if col not in cols:
-                        await session.execute(text(f"ALTER TABLE copy_orders ADD COLUMN {col} {ddl}"))
+                        await _mig.ddl(session, text(f"ALTER TABLE copy_orders ADD COLUMN {col} {ddl}"))
                         logger.info("copy_orders.%s added", col)
                 # widen mode (10->12) and status (12->20) for live_manual statuses
-                await session.execute(text("ALTER TABLE copy_orders MODIFY COLUMN mode VARCHAR(12) NOT NULL DEFAULT 'paper'"))
-                await session.execute(text("ALTER TABLE copy_orders MODIFY COLUMN status VARCHAR(20) NOT NULL DEFAULT 'simulated'"))
+                await _mig.ddl(session, text("ALTER TABLE copy_orders MODIFY COLUMN mode VARCHAR(12) NOT NULL DEFAULT 'paper'"))
+                await _mig.ddl(session, text("ALTER TABLE copy_orders MODIFY COLUMN status VARCHAR(20) NOT NULL DEFAULT 'simulated'"))
             # widen copy_subscriptions.mode (10->12) so 'live_manual' (11 chars) fits
             sub_cols = await session.execute(text(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_schema = DATABASE() AND table_name = 'copy_subscriptions'"
             ))
             if {row[0].lower() for row in sub_cols.fetchall()}:
-                await session.execute(text("ALTER TABLE copy_subscriptions MODIFY COLUMN mode VARCHAR(12) NOT NULL DEFAULT 'live_manual'"))
+                await _mig.ddl(session, text("ALTER TABLE copy_subscriptions MODIFY COLUMN mode VARCHAR(12) NOT NULL DEFAULT 'live_manual'"))
             await session.commit()
     except Exception as exc:
         logger.warning("copy_orders migration skipped: %s", exc)
@@ -220,7 +221,7 @@ async def lifespan(app: FastAPI):
             for tbl in exchange_tables:
                 cols = await _cols(tbl)
                 if cols and "exchange" not in cols:
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         f"ALTER TABLE {tbl} ADD COLUMN exchange VARCHAR(20) NOT NULL DEFAULT 'perpl'"
                     ))
                     logger.info("migration v2: %s.exchange added", tbl)
@@ -228,14 +229,14 @@ async def lifespan(app: FastAPI):
             # symbol width: HL native symbols (e.g. "xyz:BRENTOIL") exceed 10
             for tbl in ("leader_trade_events", "trader_activity"):
                 if await _cols(tbl):
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         f"ALTER TABLE {tbl} MODIFY COLUMN symbol VARCHAR(20) NOT NULL"
                     ))
 
             # copy_subscriptions.max_basis_bps (phase 5 basis gate)
             cs_cols = await _cols("copy_subscriptions")
             if cs_cols and "max_basis_bps" not in cs_cols:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE copy_subscriptions ADD COLUMN max_basis_bps INT NULL"
                 ))
                 logger.info("migration v2: copy_subscriptions.max_basis_bps added")
@@ -244,12 +245,12 @@ async def lifespan(app: FastAPI):
             tp_cols = await _cols("trader_profiles")
             if tp_cols:
                 if "is_hidden" not in tp_cols:
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         "ALTER TABLE trader_profiles ADD COLUMN is_hidden TINYINT(1) NOT NULL DEFAULT 0"
                     ))
                     logger.info("migration v2: trader_profiles.is_hidden added")
                 if "hidden_at" not in tp_cols:
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         "ALTER TABLE trader_profiles ADD COLUMN hidden_at DATETIME NULL"
                     ))
                     logger.info("migration v2: trader_profiles.hidden_at added")
@@ -264,10 +265,10 @@ async def lifespan(app: FastAPI):
                         "HAVING COUNT(*) = 1 AND MAX(column_name) = 'wallet_address'"
                     ))
                     for (old_idx,) in res.fetchall():
-                        await session.execute(text(
+                        await _mig.ddl(session, text(
                             f"ALTER TABLE trader_profiles DROP INDEX `{old_idx}`"))
                         logger.info("migration v2: dropped old unique %s", old_idx)
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         "ALTER TABLE trader_profiles ADD CONSTRAINT uq_trader_profile_exch_wallet "
                         "UNIQUE (exchange, wallet_address)"
                     ))
@@ -277,9 +278,9 @@ async def lifespan(app: FastAPI):
             wl_idx = await _indexes("watchlists")
             if wl_idx and "uq_watchlist_pair_exch" not in wl_idx:
                 if "uq_watchlist_pair" in wl_idx:
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         "ALTER TABLE watchlists DROP INDEX uq_watchlist_pair"))
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE watchlists ADD CONSTRAINT uq_watchlist_pair_exch "
                     "UNIQUE (follower_wallet, trader_wallet, exchange)"
                 ))
@@ -288,7 +289,7 @@ async def lifespan(app: FastAPI):
             # leaderboard_snapshots: query index for per-exchange windows
             lb_idx = await _indexes("leaderboard_snapshots")
             if lb_idx and "ix_lb_snap_exch_period_ts" not in lb_idx:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "CREATE INDEX ix_lb_snap_exch_period_ts "
                     "ON leaderboard_snapshots (exchange, period, timestamp)"
                 ))
@@ -332,7 +333,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema = DATABASE() AND table_name = 'hl_position_open_cache'"
             ))).scalar()
             if not exists:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "CREATE TABLE hl_position_open_cache ("
                     "  id INT AUTO_INCREMENT PRIMARY KEY,"
                     "  wallet VARCHAR(42) NOT NULL,"
@@ -372,7 +373,7 @@ async def lifespan(app: FastAPI):
                     f"AND column_name = '{col}'"
                 ))).scalar()
                 if not exists:
-                    await session.execute(text(
+                    await _mig.ddl(session, text(
                         f"ALTER TABLE copy_orders ADD COLUMN {col} {ddl}"))
                     await session.commit()
                     logger.info("migration v4: copy_orders.%s added", col)
@@ -392,7 +393,7 @@ async def lifespan(app: FastAPI):
                 "AND column_name = 'last_fill_at'"
             ))).scalar()
             if not col:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE trader_profiles ADD COLUMN last_fill_at DATETIME NULL"))
                 await session.commit()
                 logger.info("migration v5: trader_profiles.last_fill_at added")
@@ -402,7 +403,7 @@ async def lifespan(app: FastAPI):
                 "AND index_name = 'ix_trader_profiles_last_fill'"
             ))).scalar()
             if not idx:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "CREATE INDEX ix_trader_profiles_last_fill "
                     "ON trader_profiles (exchange, last_fill_at)"))
                 await session.commit()
@@ -443,7 +444,7 @@ async def lifespan(app: FastAPI):
                 "AND column_name = 'triggers_failed'"
             ))).scalar()
             if not n:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE copy_live_positions "
                     "ADD COLUMN triggers_failed TINYINT(1) NOT NULL DEFAULT 0"))
                 await session.commit()
@@ -459,7 +460,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_positions ("
                 " cycle_ts DATETIME NOT NULL,"
                 " wallet VARCHAR(42) NOT NULL,"
@@ -476,7 +477,7 @@ async def lifespan(app: FastAPI):
                 " PRIMARY KEY (cycle_ts, wallet, asset),"
                 " INDEX ix_ap_asset_cycle (asset, cycle_ts)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_flow_events ("
                 " id BIGINT NOT NULL AUTO_INCREMENT,"
                 " detected_at DATETIME(3) NOT NULL,"
@@ -496,7 +497,7 @@ async def lifespan(app: FastAPI):
                 " INDEX ix_afe_asset_time (asset, detected_at),"
                 " INDEX ix_afe_wallet_time (wallet, detected_at)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_asset_rollups ("
                 " cycle_ts DATETIME NOT NULL,"
                 " asset VARCHAR(20) NOT NULL,"
@@ -530,7 +531,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_smi ("
                 " cycle_ts DATETIME NOT NULL,"
                 " asset VARCHAR(20) NOT NULL,"
@@ -560,7 +561,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_wallet_state ("
                 " cycle_ts DATETIME NOT NULL,"
                 " wallet VARCHAR(42) NOT NULL,"
@@ -570,7 +571,7 @@ async def lifespan(app: FastAPI):
                 " PRIMARY KEY (cycle_ts, wallet),"
                 " INDEX ix_aws_wallet_cycle (wallet, cycle_ts)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_trigger_obs ("
                 " id BIGINT NOT NULL AUTO_INCREMENT,"
                 " observed_at DATETIME NOT NULL,"
@@ -602,7 +603,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_price_history ("
                 " cycle_ts DATETIME NOT NULL,"
                 " asset VARCHAR(20) NOT NULL,"
@@ -610,7 +611,7 @@ async def lifespan(app: FastAPI):
                 " source VARCHAR(8) NOT NULL DEFAULT 'venue',"
                 " PRIMARY KEY (asset, cycle_ts)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_smi_outcomes ("
                 " cycle_ts DATETIME NOT NULL,"
                 " asset VARCHAR(20) NOT NULL,"
@@ -622,7 +623,7 @@ async def lifespan(app: FastAPI):
                 " PRIMARY KEY (asset, cycle_ts),"
                 " INDEX ix_aso_done (done, cycle_ts)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_smi_stats ("
                 " asset VARCHAR(20) NOT NULL,"
                 " kind VARCHAR(16) NOT NULL,"
@@ -652,7 +653,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_wallet_flags ("
                 " wallet VARCHAR(42) NOT NULL,"
                 " is_likely_hedger TINYINT(1) NULL,"
@@ -660,7 +661,7 @@ async def lifespan(app: FastAPI):
                 " hedger_checked_at DATETIME NULL,"
                 " PRIMARY KEY (wallet)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS analytics_wallet_clusters ("
                 " cluster_id INT NOT NULL,"
                 " wallet VARCHAR(42) NOT NULL,"
@@ -691,7 +692,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema = DATABASE() AND table_name = 'trader_fill_stats' "
                 "AND column_name = 'profit_factor'"))).scalar()
             if not n:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE trader_fill_stats "
                     "ADD COLUMN profit_factor DECIMAL(12,4) NULL,"
                     "ADD COLUMN avg_win DECIMAL(20,8) NULL,"
@@ -719,7 +720,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema = DATABASE() AND table_name = 'strat_trades' "
                 "AND column_name = 'exit_reason'"))).scalar()
             if n is not None and int(n) < 128:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE strat_trades MODIFY exit_reason VARCHAR(128) NULL"))
                 await session.commit()
                 logger.info("migration v14: strat_trades.exit_reason widened to 128")
@@ -748,7 +749,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS explorer_address_meta ("
                 " address VARCHAR(42) NOT NULL,"
                 " role VARCHAR(16) NOT NULL,"
@@ -774,7 +775,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema = DATABASE() AND table_name = 'explorer_address_meta' "
                 "AND column_name = 'perpl_account_id'"))).scalar()
             if not n:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE explorer_address_meta "
                     "ADD COLUMN perpl_account_id BIGINT NULL"))
                 await session.commit()
@@ -789,7 +790,7 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         sf = get_session_factory()
         async with sf() as session:
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS perpl_events ("
                 " id BIGINT AUTO_INCREMENT PRIMARY KEY,"
                 " at DATETIME NOT NULL,"
@@ -814,7 +815,7 @@ async def lifespan(app: FastAPI):
                 " INDEX ix_pe_block (block),"
                 " INDEX ix_pe_txfrom (tx_from)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS perpl_addr_map ("
                 " account_id BIGINT NOT NULL,"
                 " address VARCHAR(42) NOT NULL,"
@@ -823,7 +824,7 @@ async def lifespan(app: FastAPI):
                 " PRIMARY KEY (account_id),"
                 " INDEX ix_pam_addr (address)"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await session.execute(text(
+            await _mig.ddl(session, text(
                 "CREATE TABLE IF NOT EXISTS perpl_indexer_state ("
                 " id TINYINT NOT NULL,"
                 " last_block BIGINT NOT NULL DEFAULT 0,"
@@ -858,7 +859,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema=DATABASE() AND table_name='strat_strategy_state' "
                 "AND column_name='effective_mode'"))).first()
             if row and int(row[0]) < 16:
-                await conn.execute(text(
+                await _mig.ddl(conn, text(
                     "ALTER TABLE strat_strategy_state "
                     "MODIFY effective_mode VARCHAR(16) NOT NULL, "
                     "MODIFY requested_mode VARCHAR(16) NOT NULL"))
@@ -879,7 +880,7 @@ async def lifespan(app: FastAPI):
                 "WHERE table_schema=DATABASE() AND table_name='strat_book_5s' "
                 "AND column_name='spread'"))).first()
             if not row or int(row[0]) == 0:
-                await conn.execute(text("ALTER TABLE strat_book_5s ADD COLUMN spread DOUBLE NULL"))
+                await _mig.ddl(conn, text("ALTER TABLE strat_book_5s ADD COLUMN spread DOUBLE NULL"))
                 logger.info("migration v22: strat_book_5s.spread added")
             elif not getattr(app.state, "_v22_logged", False):
                 logger.info("migration v22: strat_book_5s.spread present")
@@ -902,7 +903,7 @@ async def lifespan(app: FastAPI):
                 # ONLINE and fail-fast: never queue behind a long transaction
                 # and block the table for everyone else (D-112).
                 await conn.execute(text("SET SESSION lock_wait_timeout=15"))
-                await conn.execute(text(
+                await _mig.ddl(conn, text(
                     "ALTER TABLE analytics_flow_events ADD INDEX ix_afe_time (detected_at), "
                     "ALGORITHM=INPLACE, LOCK=NONE"))
                 logger.info("migration v23: analytics_flow_events.ix_afe_time added")
@@ -935,7 +936,7 @@ async def lifespan(app: FastAPI):
                     {"t": _tbl, "i": _ix})).first()
                 if not row or int(row[0]) == 0:
                     await conn.execute(text("SET SESSION lock_wait_timeout=15"))
-                    await conn.execute(text(
+                    await _mig.ddl(conn, text(
                         f"ALTER TABLE {_tbl} ADD INDEX {_ix} {_cols}, ALGORITHM=INPLACE, LOCK=NONE"))
                     logger.info("migration v24: %s.%s added", _tbl, _ix)
         except Exception as exc:
@@ -946,7 +947,7 @@ async def lifespan(app: FastAPI):
     # land on different uvicorn workers.
     try:
         async with _dbm.engine.begin() as conn:
-            await conn.execute(text(
+            await _mig.ddl(conn, text(
                 "CREATE TABLE IF NOT EXISTS siwe_nonces ("
                 " nonce VARCHAR(64) NOT NULL PRIMARY KEY,"
                 " created_at DATETIME NOT NULL,"
@@ -965,7 +966,7 @@ async def lifespan(app: FastAPI):
     # the sweep's daily retention deletes only ids at or below MAX(to_id).
     try:
         async with _dbm.engine.begin() as conn:
-            await conn.execute(text(
+            await _mig.ddl(conn, text(
                 "CREATE TABLE IF NOT EXISTS lte_archive_log ("
                 " id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,"
                 " archive_file VARCHAR(255) NOT NULL,"
@@ -986,12 +987,12 @@ async def lifespan(app: FastAPI):
     # triggers: TP/SL the app placed, so the server can say which one fired.
     try:
         async with _dbm.engine.begin() as conn:
-            await conn.execute(text(
+            await _mig.ddl(conn, text(
                 "CREATE TABLE IF NOT EXISTS telegram_alert_prefs ("
                 " user_id INT NOT NULL, alert_type VARCHAR(32) NOT NULL,"
                 " enabled TINYINT(1) NOT NULL, params JSON NULL, updated_at DATETIME NOT NULL,"
                 " PRIMARY KEY (user_id, alert_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await conn.execute(text(
+            await _mig.ddl(conn, text(
                 "CREATE TABLE IF NOT EXISTS telegram_alert_log ("
                 " id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL,"
                 " alert_type VARCHAR(32) NOT NULL, status VARCHAR(16) NOT NULL,"
@@ -999,7 +1000,7 @@ async def lifespan(app: FastAPI):
                 " tg_message_id BIGINT NULL, created_at DATETIME NOT NULL, delivered_at DATETIME NULL,"
                 " KEY ix_tal_user_key (user_id, dedupe_key, created_at),"
                 " KEY ix_tal_created (created_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"))
-            await conn.execute(text(
+            await _mig.ddl(conn, text(
                 "CREATE TABLE IF NOT EXISTS alert_triggers ("
                 " id BIGINT AUTO_INCREMENT PRIMARY KEY, user_id INT NOT NULL,"
                 " market_id INT NOT NULL, side VARCHAR(8) NOT NULL, kind VARCHAR(4) NOT NULL,"
@@ -1018,7 +1019,7 @@ async def lifespan(app: FastAPI):
         from app.services.copy_auto.schema import DDL as _AUTO_DDL
         async with _dbm.engine.begin() as conn:
             for _stmt in _AUTO_DDL:
-                await conn.execute(text(_stmt))
+                await _mig.ddl(conn, _stmt)
         if not getattr(app.state, "_v28_logged", False):
             logger.info("migration v28: auto_copy_keys / subs / positions / log present")
         app.state._v28_logged = True
@@ -1039,7 +1040,7 @@ async def lifespan(app: FastAPI):
                 "AND column_name = 'order_id'"
             ))).scalar()
             if t and str(t).lower() == 'int':
-                await session.execute(text("ALTER TABLE trade_history MODIFY order_id BIGINT NULL"))
+                await _mig.ddl(session, text("ALTER TABLE trade_history MODIFY order_id BIGINT NULL"))
                 await session.commit()
                 logger.info("migration v32: trade_history.order_id is now BIGINT")
     except Exception as exc:
@@ -1056,7 +1057,7 @@ async def lifespan(app: FastAPI):
                 "AND column_name = 'tp_oid'"
             ))).scalar()
             if not n:
-                await session.execute(text(
+                await _mig.ddl(session, text(
                     "ALTER TABLE auto_copy_positions "
                     "ADD COLUMN tp_oid VARCHAR(40) NULL, ADD COLUMN tp_px DOUBLE NULL"))
                 await session.commit()
@@ -1069,7 +1070,7 @@ async def lifespan(app: FastAPI):
         from app.routers.beta import DDL as _BETA_DDL
         async with _dbm.engine.begin() as conn:
             for _stmt in _BETA_DDL:
-                await conn.execute(text(_stmt))
+                await _mig.ddl(conn, _stmt)
     except Exception as exc:
         logger.warning("migration v30 (beta) FAILED: %s", exc)
 
@@ -1078,7 +1079,7 @@ async def lifespan(app: FastAPI):
         from app.services.featured.schema import DDL as _FEATURED_DDL
         async with _dbm.engine.begin() as conn:
             for _stmt in _FEATURED_DDL:
-                await conn.execute(text(_stmt))
+                await _mig.ddl(conn, _stmt)
         if not getattr(app.state, "_v33_logged", False):
             logger.info("migration v33: featured traders tables present")
         app.state._v33_logged = True
@@ -1090,12 +1091,14 @@ async def lifespan(app: FastAPI):
         from app.services.ut.schema import DDL as _UT_DDL
         async with _dbm.engine.begin() as conn:
             for _stmt in _UT_DDL:
-                await conn.execute(text(_stmt))
+                await _mig.ddl(conn, _stmt)
         if not getattr(app.state, "_v34_logged", False):
             logger.info("migration v34: unusual timing tables present")
         app.state._v34_logged = True
     except Exception as exc:
         logger.warning("migration v34 (unusual timing) FAILED: %s", exc)
+
+    logger.info("startup migrations: %s", _mig.summary())
 
     # Startup cleanup: liquidation_snapshots only needs the latest few rows per
     # market. The periodic pruning in liquidation_calc keeps it tight going
