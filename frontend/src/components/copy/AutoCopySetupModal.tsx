@@ -32,8 +32,9 @@ const NUM_FIELDS: [keyof AutoCopySettings, string, string][] = [
   ['daily_loss_usd', 'Daily loss limit', '$'], ['total_loss_usd', 'Total loss limit', '$'],
 ];
 
-export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, leaderName, address }: {
+export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, leaderName, address, preset: presetOverride }: {
   isOpen: boolean; onClose: () => void; leaderWallet: string; leaderName?: string; address: string;
+  preset?: { halfSize?: boolean; stopPct?: number; note?: string };
 }) {
   const qc = useQueryClient();
   const { signTypedDataAsync } = useSignTypedData();
@@ -58,7 +59,18 @@ export default function AutoCopySetupModal({ isOpen, onClose, leaderWallet, lead
   useEffect(() => {
     if (presets.data && userSettings.data && !form) {
       const { mode: dm, ...dfl } = userSettings.data.defaults;
-      setForm({ ...presets.data.defaults, ...dfl } as AutoCopySettings);
+      let f = { ...presets.data.defaults, ...dfl } as AutoCopySettings;
+      if (presetOverride) {
+        // Unusual timing page (phase 2 copy defaults): half the user's margin and a tighter stop.
+        // The stop field is a share of margin, so a 1.5 % price stop at L x leverage is 1.5 x L percent of margin.
+        const lev = Math.max(1, Number(f.max_leverage) || 1);
+        f = {
+          ...f,
+          margin_usd: presetOverride.halfSize ? Math.max(1, Math.round((Number(f.margin_usd) || 0) / 2)) : f.margin_usd,
+          sl_margin_pct: presetOverride.stopPct ? Math.min(90, Math.max(10, Math.round(presetOverride.stopPct * lev))) : f.sl_margin_pct,
+        };
+      }
+      setForm(f);
       if (dm === 'live' && userSettings.data.key.present) setMode('live');
     }
   }, [presets.data, userSettings.data]); // eslint-disable-line react-hooks/exhaustive-deps

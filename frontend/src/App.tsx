@@ -177,6 +177,7 @@ function App() {
                   <Route path="/copy/featured" element={<Navigate to="/copy/featured/wallets" replace />} />
                   <Route path="/copy/featured/wallets" element={<FeaturedB />} />
                   <Route path="/copy/featured/trades" element={<FeaturedB />} />
+                  <Route path="/copy/featured/unusual-timing" element={<FeaturedB />} />
                   <Route path="/admin/featured-whitelist" element={<FeaturedAdminB />} />
                   <Route path="/copy/watchlist" element={<CopyWatchlistPage />} />
                   <Route path="/copy/dashboard" element={<CopyDashboardPage />} />

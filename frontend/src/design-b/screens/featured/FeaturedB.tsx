@@ -16,6 +16,9 @@ import FeaturedWalletDrawer from './FeaturedWalletDrawer';
 import FeaturedTradesTab from './FeaturedTradesTab';
 import FeaturedCopySheet from './FeaturedCopySheet';
 import WhitelistGate from './WhitelistGate';
+import UnusualTimingTab from './UnusualTimingTab';
+import { getUtSummary } from '@/lib/utApi';
+import { useQuery } from '@tanstack/react-query';
 import './featured.css';
 
 // Featured traders (docs/featured-traders): Tab 1 Winning Wallets
@@ -51,7 +54,7 @@ export default function FeaturedB() {
   const phone = usePhone();
   const watchlist = useWatchlist(isAuthenticated);
   const [sp, setSp] = useSearchParams();
-  const tab = location.pathname.endsWith('/trades') ? 'trades' : 'wallets';
+  const tab = location.pathname.endsWith('/trades') ? 'trades' : location.pathname.endsWith('/unusual-timing') ? 'ut' : 'wallets';
   const view = useMemo(() => parseFt(sp), [sp]);
   const setView = (v: FtView) => setSp((p) => writeFt(p, v), { replace: true });
   useEffect(() => {
@@ -75,6 +78,10 @@ export default function FeaturedB() {
   }, []);
   useEffect(() => { checkGate(); }, [checkGate, isAuthenticated, address]);
   useEffect(() => { if (gate === 'closed' && !preview) getPreview().then(setPreview).catch(() => {}); }, [gate, preview]);
+  // Unusual timing tab count (same gate); one cached call per minute
+  // owner 2026-11-04: the tab is admin-only for now
+  const utSummary = useQuery({ queryKey: ['ut-summary'], queryFn: getUtSummary, enabled: gate === 'open' && admin, staleTime: 60_000, retry: false });
+  useEffect(() => { if (tab === 'ut' && gate === 'open' && !admin) navigate('/copy/featured/wallets', { replace: true }); }, [tab, gate, admin, navigate]);
 
   // rows
   const [data, setData] = useState<WalletsAnswer | null>(null);
@@ -150,14 +157,18 @@ export default function FeaturedB() {
           <div className="sub" style={{ marginTop: 4 }}>
             {tab === 'wallets'
               ? 'Wallets that make money by trading, on Hyperliquid and Perpl. Past 90 days. Past results do not predict future results.'
+              : tab === 'ut'
+              ? 'Wallets whose entries keep landing right before big moves, measured against chance. Timing, not the reason for it. Scores update daily; open positions and last entry update live from the trades feed.'
               : 'What the qualified wallets are doing right now, and every trade they closed. Past results do not predict future results.'}
           </div>
         </div>
-        {gate === 'open' && <div className="sub">Metrics as of {data?.as_of ?? '…'} 02:00 UTC · live fields <span className="live-dot" /> {liveNewest ? agoWords(liveNewest) : 'waiting for a trade'}</div>}
+        {gate === 'open' && tab !== 'ut' && <div className="sub">Metrics as of {data?.as_of ?? '…'} 02:00 UTC · live fields <span className="live-dot" /> {liveNewest ? agoWords(liveNewest) : 'waiting for a trade'}</div>}
+        {gate === 'open' && tab === 'ut' && <div className="sub">{utSummary.data?.scores_as_of ? `Scores as of ${utSummary.data.scores_as_of} · ${utSummary.data.scored.toLocaleString()} wallets scored so far` : 'First scores land after the daily pass'} · live fields <span className="live-dot" /> {utSummary.data?.live_at ? agoWords(utSummary.data.live_at) : 'waiting for a trade'}</div>}
       </div>
       <div className="ft-tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'wallets'} onClick={() => navigate({ pathname: '/copy/featured/wallets', search: location.search })}>Winning Wallets {data && <span className="chip chip-grey" style={{ marginLeft: 6 }}>{data.count}</span>}</button>
         <button role="tab" aria-selected={tab === 'trades'} onClick={() => navigate({ pathname: '/copy/featured/trades', search: location.search })}>Winning Trades <span className="chip chip-grey" style={{ marginLeft: 6 }}>live</span></button>
+        {admin && <button role="tab" aria-selected={tab === 'ut'} onClick={() => navigate({ pathname: '/copy/featured/unusual-timing' })}>Unusual timing {utSummary.data && <span className="chip chip-grey" style={{ marginLeft: 6 }}>{utSummary.data.flagged}</span>}</button>}
         {admin && <button role="tab" aria-selected={false} onClick={() => navigate('/admin/featured-whitelist')} style={{ marginLeft: 'auto' }}>Whitelist admin</button>}
       </div>
     </>
@@ -200,7 +211,9 @@ export default function FeaturedB() {
   return (
     <div className="screen ft">
       {header}
-      {tab === 'trades' ? (
+      {tab === 'ut' ? (
+        <UnusualTimingTab summary={utSummary.data ?? null} />
+      ) : tab === 'trades' ? (
         <FeaturedTradesTab onCopyWallet={(r) => setCopyRow(r)} onOpenWallet={openWallet} rowsByKey={rowsByKey} />
       ) : (
         <>

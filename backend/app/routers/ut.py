@@ -1,5 +1,7 @@
-"""Unusual Timing web API (phase 2 page): read-only, cached 60 s, behind the
-Featured traders whitelist gate (same 403 {"reason": "whitelist"}). Numbers
+"""Unusual Timing web API (phase 2 page): read-only, cached 60 s. Owner
+2026-11-04: admin only for now (ADMIN_ADDRESSES), the whitelist gate comes
+back when the page opens to whitelisted users; a non-admin gets the same
+403 {"reason": "whitelist"} as the rest of Featured. Numbers
 and levels come from the ut_ tables; nothing is recomputed here and no
 Hyperliquid read happens on these routes.
 
@@ -18,7 +20,18 @@ from sqlalchemy import text
 
 from app.db.database import get_session_factory
 from app.db.models import User
-from app.routers.featured import require_featured
+from app.db.models import User as _U  # noqa: F401
+from app.routers.auth import get_optional_user
+from app.routers.featured import Forbidden
+from app.services.featured import whitelist
+
+
+async def require_featured(user: User | None = Depends(get_optional_user)) -> User:
+    """Admin only for now (owner 2026-11-04)."""
+    if user is None or not whitelist.is_admin(user.wallet_address):
+        raise Forbidden()
+    return user
+
 from app.services.ut import api as utapi
 from app.utils import resp_cache
 
@@ -45,7 +58,7 @@ async def _summary_build() -> dict:
         clusters = (await s.execute(text("SELECT COUNT(*), MAX(member_count) FROM ut_clusters WHERE as_of = (SELECT MAX(as_of) FROM ut_clusters)"))).first()
         last = (await s.execute(text(
             "SELECT wallet, coin, side, notional, level, payload, sent_at, created_at FROM ut_alerts_sent WHERE sent_at IS NOT NULL "
-            "AND wallet <> '0x0000000000000000000000000000000000000000' ORDER BY id DESC LIMIT 1"))).first()
+            "AND wallet NOT LIKE '0x0000%' AND level <> 'test' ORDER BY id DESC LIMIT 1"))).first()
         drift = (await s.execute(text(
             "SELECT coin, drift_score, funding_trend_48h, oi_change_6h, oi_change_24h, abn_ret_12h, ut_wallets_6h, t FROM ut_market_drift "
             "WHERE t = (SELECT MAX(t) FROM ut_market_drift WHERE drift_score > 0) ORDER BY drift_score DESC LIMIT 8"))).all()

@@ -10,8 +10,14 @@ import AutoCopySetupModal from '@/components/copy/AutoCopySetupModal';
 // Disabled with the server's reason when unavailable (not allowlisted, all
 // real-time slots taken by auto-copied traders, yourself, not logged in).
 
-export default function AutoCopyButton({ leaderWallet, leaderName, className }: {
+export type AutoCopyPreset = { halfSize?: boolean; stopPct?: number; note?: string };
+
+export default function AutoCopyButton({ leaderWallet, leaderName, className, label, preset }: {
   leaderWallet: string; leaderName?: string; className?: string;
+  /** button text (default "Auto-copy"); the Unusual timing page says "Copy (half size)" */
+  label?: string;
+  /** opens the sheet with margin at half the user's default and a price stop (percent), spec phase 2 copy defaults */
+  preset?: AutoCopyPreset;
 }) {
   const { address, isAuthenticated } = useAuth();
   const toast = useToast();
@@ -56,14 +62,14 @@ export default function AutoCopyButton({ leaderWallet, leaderName, className }: 
         className={clsx(className ?? 'text-xs font-semibold px-3 py-2 rounded-lg border min-h-[44px]',
           enabled ? 'bg-accent/15 text-accent border-accent/30' : 'bg-bg-secondary text-text-secondary/60 border-text-secondary/15 cursor-not-allowed')}
       >
-        Auto-copy
+        {label ?? 'Auto-copy'}
       </button>
       {!enabled && reason && reason !== 'Checking…' && (
         <span className="sr-only">{reason}</span>
       )}
       {open && address && (
         <AutoCopySetupModal isOpen={open} onClose={() => setOpen(false)} leaderWallet={leaderWallet}
-                            leaderName={leaderName} address={address} />
+                            leaderName={leaderName} address={address} preset={preset} />
       )}
     </>
   );
