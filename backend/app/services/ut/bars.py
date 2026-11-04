@@ -55,7 +55,7 @@ async def _build(tf: str, since: datetime, min_prints: int) -> int:
             "  SELECT f.coin, f.time, f.px, f.sz FROM hl_fills f WHERE f.time >= :a"
             "  UNION ALL"
             "  SELECT CONVERT(e.coin USING utf8mb4) COLLATE utf8mb4_0900_ai_ci, FROM_UNIXTIME(e.ts_ms / 1000), e.px, e.sz FROM hl_fill_events e"
-            "  LEFT JOIN hl_fills f2 ON f2.wallet = e.wallet_address AND f2.tid = CAST(e.tid AS UNSIGNED)"
+            "  LEFT JOIN hl_fills f2 ON f2.wallet = CONVERT(e.wallet_address USING utf8mb4) COLLATE utf8mb4_0900_ai_ci AND f2.tid = CAST(e.tid AS UNSIGNED)"
             "  WHERE e.ts_ms >= UNIX_TIMESTAMP(:a) * 1000 AND e.px IS NOT NULL AND e.sz IS NOT NULL AND f2.tid IS NULL"
             ") p JOIN ut_universe u ON u.coin = p.coin AND u.kind IN ('perp','hip3') "
             "GROUP BY p.coin, b HAVING n >= :m"), {"step": step, "a": since, "m": min_prints})).all()
