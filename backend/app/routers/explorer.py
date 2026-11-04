@@ -834,7 +834,12 @@ async def explorer_perpl_history(address: str, limit: int = Query(300, ge=1, le=
               for e in reversed(events) if e["balance_after"] is not None]
     through = await _indexed_through_date()
     status_line = None
-    if state is None or (state.get("note") or "").startswith("awaiting"):
+    if state is not None and (state.get("note") or "").startswith("archived"):
+        # 2026-11-04: the indexed events were moved off the server (owner);
+        # the note carries the dates the archive covers, nothing else is shown
+        state["backfill_pct"] = None
+        status_line = state["note"]
+    elif state is None or (state.get("note") or "").startswith("awaiting"):
         status_line = ("Indexer awaiting its Envio API token (owner PENDING), "
                        "history fills in once indexing starts")
     elif state.get("backfill_pct") is not None and state["backfill_pct"] < 100:
@@ -878,7 +883,9 @@ async def explorer_activity(address: str, days: int = Query(90, ge=1, le=365)) -
     cutoff = datetime.utcnow().timestamp() - days * 86400
     perpl_note = None
     state = await _indexer_state()
-    if state is None or (state.get("note") or "").startswith("awaiting"):
+    if state is not None and (state.get("note") or "").startswith("archived"):
+        perpl_note = state["note"]
+    elif state is None or (state.get("note") or "").startswith("awaiting"):
         perpl_note = "Perpl side pending: indexer awaiting its Envio API token"
     for e in perpl_events:
         try:

@@ -77,7 +77,15 @@ async def _first_pass_needed() -> bool:
     sf = get_session_factory()
     async with sf() as s:
         n = (await s.execute(text("SELECT COUNT(*) FROM ut_universe"))).scalar()
-    return int(n or 0) == 0
+        if int(n or 0) == 0:
+            return True
+        # a restart in the middle of the first candle pass: resume when a
+        # candidate coin has no 1 h bars at all and today's weight is left
+        missing = (await s.execute(text(
+            "SELECT COUNT(DISTINCT f.coin) FROM hl_fills f JOIN ut_universe u ON u.coin = f.coin AND u.kind IN ('perp','hip3') "
+            "LEFT JOIN ut_candles c ON c.coin = f.coin AND c.tf = '1h' AND c.t >= UTC_TIMESTAMP() - INTERVAL 2 DAY "
+            "WHERE f.time >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND f.dir LIKE 'Open%' AND c.coin IS NULL"))).scalar()
+    return int(missing or 0) > 0 and (await hl.weight_today()) < hl.DAILY_WEIGHT_CAP - 500
 
 
 async def _loop(stop: asyncio.Event) -> None:
