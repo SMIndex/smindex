@@ -204,8 +204,8 @@ def median_2h_range_pct(c1h: list[dict]) -> float | None:
     vals = []
     for i in range(len(rows) - 1):
         base = float(rows[i]["c"])
-        if base <= EPS:
-            continue
+        if base <= EPS or int(rows[i + 1]["t"]) - int(rows[i]["t"]) != 3_600_000:
+            continue          # a gap (bars built from sparse fills): not a 2 h range
         hi = max(float(rows[i]["h"]), float(rows[i + 1]["h"]))
         lo = min(float(rows[i]["l"]), float(rows[i + 1]["l"]))
         vals.append((hi - lo) / base * 100.0)
@@ -241,8 +241,9 @@ def big_moves(c1h: list[dict], thr: float) -> tuple[list[dict], int]:
     n = 0
     for i in range(len(rows) - 2):
         base = float(rows[i]["c"])
-        if base <= EPS:
-            continue
+        t_i = int(rows[i]["t"])
+        if base <= EPS or int(rows[i + 1]["t"]) != t_i + 3_600_000 or int(rows[i + 2]["t"]) != t_i + 7_200_000:
+            continue          # only hours followed by the two real next hours count (fills-built bars leave gaps)
         n += 1
         nxt = rows[i + 1:i + 3]
         up = (max(float(c["h"]) for c in nxt) / base - 1.0) * 100.0

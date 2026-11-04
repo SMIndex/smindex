@@ -15,6 +15,7 @@ Numbers are written as they come out, including a failed ratio.
 """
 from __future__ import annotations
 
+import bisect
 import os
 import random
 from datetime import datetime, timedelta
@@ -111,7 +112,14 @@ async def shuffle_check() -> dict:
         tm = common.ms(t) + shift[w]
         if tm + 2 * 3_600_000 > now_ms:
             continue
-        fm = rules.forward_moves(float(px), side, tm, cache[coin][0], cache[coin][1])
+        # price the shifted entry at its new time (close of the last bar before it);
+        # keeping the real fill price would credit days of drift as a "move"
+        bars_c, ts_c = cache[coin]
+        j = bisect.bisect_left(ts_c, tm) - 1
+        if j < 0 or tm - ts_c[j] > 2 * 3_600_000:
+            continue
+        px_shifted = bars_c[j]["c"]
+        fm = rules.forward_moves(float(px_shifted), side, tm, bars_c, ts_c)
         if fm["mfe_2h"] is None:
             continue
         a = per_w[w]
