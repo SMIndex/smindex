@@ -400,23 +400,53 @@ async def coins_for_1h(limit: int | None = None) -> list[str]:
     return coins[:limit] if limit else coins
 
 
+async def pass_pending() -> bool:
+    """True while a daily pass has started and not finished (the cap stopped
+    it, or the API restarted): ut_queue row kind 'pass', item 'daily_1h'."""
+    sf = get_session_factory()
+    async with sf() as s:
+        row = (await s.execute(text("SELECT done_at FROM ut_queue WHERE kind='pass' AND item='daily_1h'"))).first()
+    return bool(row) and row[0] is None
+
+
+async def _pass_mark(done: bool) -> None:
+    sf = get_session_factory()
+    async with sf() as s:
+        if done:
+            await s.execute(text("UPDATE ut_queue SET done_at=UTC_TIMESTAMP(), note='complete' WHERE kind='pass' AND item='daily_1h'"))
+        else:
+            await s.execute(text(
+                "INSERT INTO ut_queue (kind, item, queued_at, done_at, note) VALUES ('pass', 'daily_1h', UTC_TIMESTAMP(), NULL, 'started') "
+                "ON DUPLICATE KEY UPDATE queued_at=UTC_TIMESTAMP(), done_at=NULL, note='started'"))
+        await s.commit()
+
+
 async def daily(run: Run) -> dict:
-    """02:30 UTC: universe snapshot, 1 h candles for every candidate coin
-    (new coins first, then the daily top-up), then the queue (ledger, fills,
-    1 m candles) until the day's weight is spent."""
-    out = {"universe": 0, "coins_1h": 0, "bars_1h": 0, "queue": 0}
+    """02:30 UTC (and on a resume): universe snapshot, then 1 h candles for
+    every candidate coin, most entries first, reading only the stretches the
+    stored bars do not cover; then the queue (ledger, fills, 1 m candles)
+    until the day's weight is spent. The pass is marked pending until it
+    completes, so a restart or the cap resumes it instead of waiting a day."""
+    out = {"universe": 0, "coins_1h": 0, "bars_1h": 0, "reads_1h": 0, "coins_no_read": 0, "queue": 0}
+    await _pass_mark(done=False)
     try:
         u = await universe_snapshot(run)
         out["universe"] = u["coins"]
         coins = await coins_for_1h()
         for coin in coins:
+            before = run.requests
             n = await candles(run, coin, "1h", H1_DAYS)
             out["coins_1h"] += 1
             out["bars_1h"] += n
+            out["reads_1h"] += run.requests - before
+            if run.requests == before:
+                out["coins_no_read"] += 1
         out["queue"] = await serve_queue(run)
+        await _pass_mark(done=True)
     except Budget as exc:
         run.notes.append(str(exc))
         logger.info("ut daily: %s", exc)
+    run.notes.append(f"1h: {out['coins_1h']} coins, {out['reads_1h']} reads, {out['coins_no_read']} covered by stored bars")
     return out
 
 
