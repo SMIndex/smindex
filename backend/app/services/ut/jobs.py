@@ -84,7 +84,7 @@ async def _first_pass_needed() -> bool:
     return (await hl.pass_pending()) and (await hl.weight_today()) < hl.DAILY_WEIGHT_CAP - 500
 
 
-async def _loop(stop: asyncio.Event) -> None:
+async def _daily_loop(stop: asyncio.Event) -> None:
     await asyncio.sleep(90)       # let the API settle after a restart
     try:
         if await _first_pass_needed():
@@ -94,38 +94,59 @@ async def _loop(stop: asyncio.Event) -> None:
         logger.warning("ut reader first pass: %s", exc)
     while not stop.is_set():
         now = datetime.utcnow()
-        nd, nh = _next_daily(now), _next_hourly(now)
-        nxt = min(nd, nh)
+        nd = _next_daily(now)
         try:
-            await asyncio.wait_for(stop.wait(), timeout=max(1.0, (nxt - now).total_seconds()))
+            await asyncio.wait_for(stop.wait(), timeout=max(1.0, (nd - now).total_seconds()))
             break
         except asyncio.TimeoutError:
             pass
         try:
-            if nxt == nd:
-                await run_daily()
-            else:
-                await run_hourly()
+            await run_daily()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("ut reader loop: %s", exc)
+            logger.warning("ut reader daily loop: %s", exc)
+
+
+async def _hourly_loop(stop: asyncio.Event) -> None:
+    """Own task: the open-interest snapshot must land every hour even while a
+    daily candle pass (hours long) is running (2026-11-04: one loop served
+    both and no snapshot was taken all day)."""
+    await asyncio.sleep(120)
+    while not stop.is_set():
+        now = datetime.utcnow()
+        nh = _next_hourly(now)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=max(1.0, (nh - now).total_seconds()))
+            break
+        except asyncio.TimeoutError:
+            pass
+        try:
+            await run_hourly()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ut reader hourly loop: %s", exc)
+
+
+_htask: asyncio.Task | None = None
 
 
 def start(stop: asyncio.Event) -> None:
-    global _task
+    global _task, _htask
     if _task is None or _task.done():
-        _task = asyncio.create_task(_loop(stop))
-        logger.info("ut reader started (daily %02d:%02d UTC, hourly :%02d, cap %d weight/day)", DAILY_AT[0], DAILY_AT[1], HOURLY_MIN, hl.DAILY_WEIGHT_CAP)
+        _task = asyncio.create_task(_daily_loop(stop))
+    if _htask is None or _htask.done():
+        _htask = asyncio.create_task(_hourly_loop(stop))
+    logger.info("ut reader started (daily %02d:%02d UTC, hourly :%02d, cap %d weight/day)", DAILY_AT[0], DAILY_AT[1], HOURLY_MIN, hl.DAILY_WEIGHT_CAP)
 
 
 async def stop() -> None:
-    global _task
-    if _task and not _task.done():
-        _task.cancel()
-        try:
-            await _task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
-    _task = None
+    global _task, _htask
+    for t in (_task, _htask):
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+    _task = _htask = None
 
 
 def status() -> dict:

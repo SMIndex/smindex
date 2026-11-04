@@ -143,7 +143,7 @@ async def _wallet_build(address: str) -> dict:
         {"key": "s6", "name": "Cluster", "pass": sig["s6"], "value": (f"{row['co_entries']} co-entries with flagged wallets" if row["co_entries"] else "no co-entries with flagged wallets")},
         {"key": "s7", "name": "Exit speed", "pass": sig["s7"], "value": f"closes within 2 h of the peak on {row['exit_speed_hits']} of {row['hits']} hits"},
     ]
-    return {**_row_public(row), "entries": entries, "signals_detail": signals, **trips, "candles": candles,
+    return {**_row_public(row), "entries_list": entries, "signals_detail": signals, **trips, "candles": candles,
             "level_words": utapi.LEVEL_WORDS.get(row["level"], "Not listed."), "scores_as_of": data["as_of"],
             "first_deposit_usd": row.get("first_deposit_usd"), "evidence_events": ev.get("events") or [], "top_trades": ev.get("top_trades") or []}
 
