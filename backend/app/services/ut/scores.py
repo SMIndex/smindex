@@ -140,17 +140,23 @@ async def _scored_wallets(since: datetime) -> list[str]:
 
 
 async def _co_entries_among(flagged: set[str], since: datetime) -> dict[str, int]:
+    """Co-entries per flagged wallet with other flagged wallets, counted only on
+    pairs that pass the cluster edge rule (3+ or 2+ on events, and at least
+    5x what chance predicts for two wallets that busy on the same coins)."""
     if not flagged:
         return {}
+    from app.services.ut import clusters as _cl
     sf = get_session_factory()
-    out: dict[str, int] = {}
     async with sf() as s:
         rows = (await s.execute(text(
-            "SELECT wallet_a, wallet_b, COUNT(*) FROM ut_coentries WHERE time_a >= :a AND wallet_a IN :f AND wallet_b IN :f GROUP BY wallet_a, wallet_b"
+            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND wallet_a IN :f AND wallet_b IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": sorted(flagged)})).all()
-    for a, b, n in rows:
-        out[a] = out.get(a, 0) + int(n)
-        out[b] = out.get(b, 0) + int(n)
+    counts = await _cl.entry_counts(sorted(flagged), since)
+    edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in rows], counts=counts)
+    out: dict[str, int] = {}
+    for (a, b), v in edges.items():
+        out[a] = out.get(a, 0) + int(v["n"])
+        out[b] = out.get(b, 0) + int(v["n"])
     return out
 
 

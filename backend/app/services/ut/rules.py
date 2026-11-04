@@ -405,15 +405,45 @@ def co_entry_pairs(entries: list[dict], window_ms: int = 60_000) -> list[tuple]:
     return out
 
 
-def coentry_edges(pairs: list[tuple], min_total: int = 3, min_on_event: int = 2) -> dict[tuple[str, str], dict]:
+CHANCE_MULT = 5.0           # observed co-entries must be at least this many times what chance predicts
+
+
+def expected_coentries(counts_a: dict, counts_b: dict, window_ms: int = 60_000, span_ms: int = 90 * 86_400_000) -> float:
+    """Co-entries two independent wallets would produce by chance: per coin
+    and side, n_a x n_b x (2 x window / span), summed. counts are
+    {(coin, side): entries}."""
+    tot = 0.0
+    for k, na in counts_a.items():
+        nb = counts_b.get(k)
+        if nb:
+            tot += na * nb * (2.0 * window_ms / span_ms)
+    return tot
+
+
+def coentry_edges(pairs: list[tuple], min_total: int = 3, min_on_event: int = 2,
+                  counts: dict | None = None) -> dict[tuple[str, str], dict]:
     """Pairs to graph edges: kept with 3 or more co-entries, or 2 or more on
-    events. {(a, b): {n, on_event}}."""
+    events, AND (when per-wallet entry counts are given) at least CHANCE_MULT
+    times the co-entries chance predicts for two wallets that busy on the same
+    coins. Two active traders on BTC co-enter inside 60 s many times a quarter
+    without knowing each other; the chance test keeps them apart (2026-11-04:
+    without it 148 flagged wallets fell into one component).
+    {(a, b): {n, on_event, expected}}."""
     agg: dict[tuple[str, str], dict] = {}
     for wa, wb, _coin, _side, _ta, _tb, on_ev in pairs:
-        d = agg.setdefault((wa, wb), {"n": 0, "on_event": 0})
+        d = agg.setdefault((wa, wb), {"n": 0, "on_event": 0, "expected": None})
         d["n"] += 1
         d["on_event"] += 1 if on_ev else 0
-    return {k: v for k, v in agg.items() if v["n"] >= min_total or v["on_event"] >= min_on_event}
+    out = {}
+    for (a, b), v in agg.items():
+        if not (v["n"] >= min_total or v["on_event"] >= min_on_event):
+            continue
+        if counts is not None:
+            v["expected"] = expected_coentries(counts.get(a, {}), counts.get(b, {}))
+            if v["n"] < CHANCE_MULT * v["expected"]:
+                continue
+        out[(a, b)] = v
+    return out
 
 
 def components(nodes: list[str], edges: list[tuple[str, str]]) -> list[list[str]]:

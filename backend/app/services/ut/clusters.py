@@ -55,6 +55,21 @@ async def coentries(since: datetime) -> dict:
     return {"pairs": total, "coins": len(coins), "capped_coins": capped}
 
 
+async def entry_counts(wallets: list[str], since: datetime) -> dict[str, dict]:
+    """wallet -> {(coin, side): entries in the window}, for the chance test."""
+    if not wallets:
+        return {}
+    sf = get_session_factory()
+    async with sf() as s:
+        rows = (await s.execute(text(
+            "SELECT wallet, coin, side, COUNT(*) FROM ut_entries WHERE time >= :a AND wallet IN :w GROUP BY wallet, coin, side"
+        ).bindparams(bindparam("w", expanding=True)), {"a": since, "w": wallets})).all()
+    out: dict[str, dict] = {}
+    for w, c, sd, n in rows:
+        out.setdefault(w, {})[(c, sd)] = int(n)
+    return out
+
+
 async def build(as_of: date | None = None) -> dict:
     as_of = as_of or common.now_utc().date()
     since = common.now_utc() - timedelta(days=common.WINDOW_DAYS)
@@ -83,7 +98,8 @@ async def build(as_of: date | None = None) -> dict:
                 "SELECT DISTINCT wallet, event_id FROM ut_entries WHERE time >= :a AND event_id IS NOT NULL AND wallet IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all():
             ev_by_w.setdefault(w, set()).add(int(ev))
-    co_edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in pairs])
+    counts = await entry_counts(flagged, since)
+    co_edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in pairs], counts=counts)
     edges: dict[tuple[str, str], set[str]] = {k: {"co_entry"} for k in co_edges}
     by_funder: dict[str, list[str]] = {}
     for w, (f, _fd, _lev) in meta.items():

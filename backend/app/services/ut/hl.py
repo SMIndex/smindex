@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.db.database import get_session_factory
 from app.services.featured import roundtrips as rt
@@ -442,6 +442,9 @@ async def daily(run: Run) -> dict:
     try:
         u = await universe_snapshot(run)
         out["universe"] = u["coins"]
+        # wallet age is in every report line and S4 needs it: the ledgers of the
+        # flagged wallets go before the remaining candle coins (about 21 weight each)
+        out["queue"] = await serve_queue(run, kinds=("ledger",), limit=LEDGER_FIRST)
         coins = await coins_for_1h()
         for coin in coins:
             before = run.requests
@@ -451,7 +454,7 @@ async def daily(run: Run) -> dict:
             out["reads_1h"] += run.requests - before
             if run.requests == before:
                 out["coins_no_read"] += 1
-        out["queue"] = await serve_queue(run)
+        out["queue"] += await serve_queue(run)
         await _pass_mark(done=True)
     except Budget as exc:
         run.notes.append(str(exc))
@@ -460,12 +463,16 @@ async def daily(run: Run) -> dict:
     return out
 
 
-async def serve_queue(run: Run, kinds: tuple[str, ...] = ("ledger", "fills", "candles_1m")) -> int:
+LEDGER_FIRST = 300
+
+
+async def serve_queue(run: Run, kinds: tuple[str, ...] = ("ledger", "fills", "candles_1m"), limit: int = 400) -> int:
     sf = get_session_factory()
     done = 0
     async with sf() as s:
         items = (await s.execute(text(
-            "SELECT kind, item FROM ut_queue WHERE done_at IS NULL ORDER BY FIELD(kind, 'ledger', 'candles_1m', 'fills'), queued_at LIMIT 400"))).all()
+            "SELECT kind, item FROM ut_queue WHERE done_at IS NULL AND kind IN :k ORDER BY FIELD(kind, 'ledger', 'candles_1m', 'fills'), queued_at LIMIT :n"
+        ).bindparams(bindparam("k", expanding=True)), {"k": list(kinds), "n": limit})).all()
     for kind, item in items:
         if kind not in kinds:
             continue
