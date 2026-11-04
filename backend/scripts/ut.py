@@ -230,8 +230,8 @@ async def cmd_alerts_test(args) -> None:
 
 
 async def cmd_run(args) -> None:
-    from app.services.ut import clusters, coin_stats, drift, entries, events, scores
-    steps = {"coin_stats": lambda: coin_stats.build(), "events": lambda: events.build(full=True), "entries": lambda: entries.build_all(),
+    from app.services.ut import bars, clusters, coin_stats, drift, entries, events, scores
+    steps = {"bars": lambda: bars.build(), "coin_stats": lambda: coin_stats.build(), "events": lambda: events.build(full=True), "entries": lambda: entries.build_all(),
              "forward": lambda: entries.compute_forward(), "close": lambda: entries.close_times(), "scores": lambda: scores.build(),
              "clusters": lambda: clusters.build(), "drift": lambda: drift.build()}
     if args.which == "daily":
@@ -277,7 +277,7 @@ async def main() -> None:
     p = sub.add_parser("drift"); p.add_argument("--top", type=int, default=20)
     p = sub.add_parser("validate"); p.add_argument("--out", default=OUT_DEFAULT)
     p = sub.add_parser("alerts"); p.add_argument("what", choices=["test"])
-    p = sub.add_parser("run"); p.add_argument("which", choices=["daily", "hourly", "coin_stats", "events", "entries", "forward", "close", "scores", "clusters", "drift"])
+    p = sub.add_parser("run"); p.add_argument("which", choices=["daily", "hourly", "bars", "coin_stats", "events", "entries", "forward", "close", "scores", "clusters", "drift"])
     sub.add_parser("status")
     args = ap.parse_args()
     await database.init_db(settings.DATABASE_URL)

@@ -30,7 +30,8 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-UT_WPM = float(os.environ.get("UT_WPM", "40"))                       # weight per minute, a third of featured's first pass
+UT_WPM = float(os.environ.get("UT_WPM", "200"))                      # weight per minute by day (owner, 2026-11-04)
+UT_WPM_NIGHT = float(os.environ.get("UT_WPM_NIGHT", "400"))          # 20:00 to 04:00 UTC
 DAILY_WEIGHT_CAP = int(os.environ.get("UT_DAILY_WEIGHT_CAP", "18000"))   # brief: under 20,000 a day
 HL_RETRIES = 4
 CANDLE_MAX = 5000                   # candles per candleSnapshot answer
@@ -38,6 +39,11 @@ H1_DAYS = 90
 M1_DAYS = 7
 FILLS_PAGES = 2                     # the brief's two-page rule for feed wallets
 _pause_mult = 1.0
+
+
+def wpm_now() -> float:
+    h = datetime.utcnow().hour
+    return UT_WPM_NIGHT if (h >= 20 or h < 4) else UT_WPM
 
 
 class Budget(Exception):
@@ -120,7 +126,7 @@ async def hl_post(run: Run, payload: dict, *, timeout: float = 30.0):
         w = hl_client.base_weight(info_type) + hl_client.extra_weight(info_type, items)
         run.weight += w
         _pause_mult = max(1.0, _pause_mult * 0.9)
-        await asyncio.sleep(60.0 * w / UT_WPM * _pause_mult)
+        await asyncio.sleep(60.0 * w / wpm_now() * _pause_mult)
         return body
     return None
 
@@ -179,8 +185,8 @@ async def _store_candles(coin: str, tf: str, body: list) -> int:
     async with sf() as s:
         for i in range(0, len(rows), 1000):
             await s.execute(text(
-                "INSERT INTO ut_candles (coin, tf, t, o, h, l, c, v) VALUES (:coin, :tf, :t, :o, :h, :l, :c, :v) "
-                "ON DUPLICATE KEY UPDATE o=VALUES(o), h=VALUES(h), l=VALUES(l), c=VALUES(c), v=VALUES(v)"), rows[i:i + 1000])
+                "INSERT INTO ut_candles (coin, tf, t, o, h, l, c, v, src) VALUES (:coin, :tf, :t, :o, :h, :l, :c, :v, 'hl') "
+                "ON DUPLICATE KEY UPDATE o=VALUES(o), h=VALUES(h), l=VALUES(l), c=VALUES(c), v=VALUES(v), src='hl'"), rows[i:i + 1000])
         await s.commit()
     return len(rows)
 
@@ -192,25 +198,56 @@ async def _last_candle_ms(coin: str, tf: str) -> int | None:
     return rt.dt_to_ms(v) if v else None
 
 
+GAP_MERGE = 6          # gaps closer than this many bars are one read (20 weight each)
+
+
+async def _gaps(coin: str, tf: str, start_ms: int, end_ms: int) -> list[tuple[int, int]]:
+    """Stretches of [start, end) with no stored bar of this coin and tf,
+    merged when closer than GAP_MERGE bars. Bars built from fills count as
+    stored (owner, 2026-11-04: read the venue only for what the fills do not
+    cover)."""
+    step = 60_000 if tf == "1m" else 3_600_000
+    sf = get_session_factory()
+    async with sf() as s:
+        rows = (await s.execute(text("SELECT t FROM ut_candles WHERE coin=:c AND tf=:tf AND t >= :a AND t < :b ORDER BY t"),
+                                {"c": coin, "tf": tf, "a": rt.ms_to_dt(start_ms), "b": rt.ms_to_dt(end_ms)})).scalars().all()
+    have = [rt.dt_to_ms(t) for t in rows]
+    gaps: list[list[int]] = []
+    cur = start_ms
+    for t in have + [end_ms]:
+        if t - cur >= step:
+            gaps.append([cur, t])
+        cur = t + step
+    merged: list[list[int]] = []
+    for g in gaps:
+        if merged and g[0] - merged[-1][1] <= GAP_MERGE * step:
+            merged[-1][1] = g[1]
+        else:
+            merged.append(g)
+    return [(a, b) for a, b in merged if b - a >= step]
+
+
 async def candles(run: Run, coin: str, tf: str, days: int) -> int:
-    """Fetch what is missing for one coin: from the last stored bar (or now
-    minus `days`) to now, in answers of at most CANDLE_MAX bars. Returns the
-    number of bars stored. The current, still open bar is re-read next time."""
+    """Fetch only the stretches that have no stored bar (from fills or an
+    earlier read) inside the last `days`, in answers of at most CANDLE_MAX
+    bars. Returns the number of bars stored. The current open bar is read
+    again next time."""
     step = 60_000 if tf == "1m" else 3_600_000
     now_ms = int(time.time() * 1000)
-    last = await _last_candle_ms(coin, tf)
-    start = max(last, now_ms - days * rt.DAY_MS) if last else now_ms - days * rt.DAY_MS
+    window_start = now_ms - days * rt.DAY_MS
     stored = 0
-    while start < now_ms:
-        end = min(now_ms, start + CANDLE_MAX * step)
-        body = await hl_post(run, {"type": "candleSnapshot", "req": {"coin": coin, "interval": tf, "startTime": start, "endTime": end}})
-        if body is None:
-            run.notes.append(f"candles {coin} {tf} failed")
-            break
-        stored += await _store_candles(coin, tf, body)
-        if len(body) < CANDLE_MAX:
-            break
-        start = int(body[-1]["t"]) + step
+    for g0, g1 in await _gaps(coin, tf, window_start - (window_start % step), now_ms):
+        start = g0
+        while start < g1:
+            end = min(g1, start + CANDLE_MAX * step)
+            body = await hl_post(run, {"type": "candleSnapshot", "req": {"coin": coin, "interval": tf, "startTime": start, "endTime": end}})
+            if body is None:
+                run.notes.append(f"candles {coin} {tf} failed")
+                return stored
+            stored += await _store_candles(coin, tf, body)
+            if len(body) < CANDLE_MAX:
+                break
+            start = int(body[-1]["t"]) + step
     return stored
 
 

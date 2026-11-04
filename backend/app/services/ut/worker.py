@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 
 from app.db.database import get_session_factory
-from app.services.ut import clusters, coin_stats, drift, entries, events, scores
+from app.services.ut import bars, clusters, coin_stats, drift, entries, events, scores
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -50,6 +50,7 @@ async def _step(name: str, coro) -> dict:
 
 async def run_daily() -> dict:
     out = {}
+    out["bars"] = await _step("ut_bars_from_fills", bars.build())
     out["coin_stats"] = await _step("ut_coin_stats", coin_stats.build())
     out["events"] = await _step("ut_events_build", events.build(full=True))
     out["entries"] = await _step("ut_entries_build", entries.build_all())
@@ -63,6 +64,7 @@ async def run_daily() -> dict:
 
 async def run_hourly() -> dict:
     out = {}
+    out["bars"] = await _step("ut_bars_from_fills_h", bars.build(days=2))
     out["events"] = await _step("ut_events_hourly", events.build(full=False))
     out["forward"] = await _step("ut_entries_forward_h", entries.compute_forward())
     out["drift"] = await _step("ut_drift", drift.build())

@@ -259,7 +259,10 @@ async def compute_forward(coins: list[str] | None = None, *, cutoff: datetime | 
         upd = []
         for eid, w, side, t, px, notional in rows:
             tm = common.ms(t)
-            use_1m = m1_from is not None and tm >= m1_from and tm + 2 * 3_600_000 <= (m1_to or 0) + 60_000
+            # 1 m bars only when the 2 h window after the entry has at least 70 % of its minutes
+            # (bars built from fills exist only for minutes with a print)
+            use_1m = (m1_from is not None and tm >= m1_from and tm + 2 * 3_600_000 <= (m1_to or 0) + 60_000
+                      and len(rules.window(c1m, ts1m, tm, tm + 2 * 3_600_000)) >= 84)
             fm = rules.forward_moves(float(px), side, tm, c1m if use_1m else c1h, ts1m if use_1m else ts1h)
             vol = rules.volume_after(c1h, tm, ts=ts1h) or rules.volume_after(c1m, tm, ts=ts1m)
             moved = rules.moved_market(float(notional), vol)
