@@ -236,7 +236,17 @@ async def candles(run: Run, coin: str, tf: str, days: int) -> int:
     now_ms = int(time.time() * 1000)
     window_start = now_ms - days * rt.DAY_MS
     stored = 0
-    for g0, g1 in await _gaps(coin, tf, window_start - (window_start % step), now_ms):
+    gaps = await _gaps(coin, tf, window_start - (window_start % step), now_ms)
+    if not gaps:
+        return 0
+    # every read costs 20 plus 1 per 60 bars: scattered gaps can cost more than
+    # one read of the whole window (12 % of coin-hours are dense in the stored
+    # fills, most coins are patchy), so take the cheaper of the two
+    per_gap = sum(20 + -(-((g1 - g0) // step) // 60) for g0, g1 in gaps)
+    whole = 20 + -(-((now_ms - window_start) // step) // 60)
+    if len(gaps) > 1 and per_gap >= whole:
+        gaps = [(window_start - (window_start % step), now_ms)]
+    for g0, g1 in gaps:
         start = g0
         while start < g1:
             end = min(g1, start + CANDLE_MAX * step)
