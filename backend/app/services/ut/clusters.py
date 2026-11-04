@@ -101,9 +101,10 @@ async def build(as_of: date | None = None) -> dict:
     counts = await entry_counts(flagged, since)
     co_edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in pairs], counts=counts)
     edges: dict[tuple[str, str], set[str]] = {k: {"co_entry"} for k in co_edges}
+    services = await scores.service_funders()
     by_funder: dict[str, list[str]] = {}
     for w, (f, _fd, _lev) in meta.items():
-        if f and labels.get(f, (None, None))[1] not in scores.SHARED_FUNDER_SKIP_KINDS:
+        if f and labels.get(f, (None, None))[1] not in scores.SHARED_FUNDER_SKIP_KINDS and f not in services:
             by_funder.setdefault(f, []).append(w)
     for ws in by_funder.values():
         for i in range(len(ws)):

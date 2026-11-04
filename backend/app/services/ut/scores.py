@@ -28,7 +28,8 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-SHARED_FUNDER_SKIP_KINDS = {"cex", "bridge", "mint"}
+SHARED_FUNDER_SKIP_KINDS = {"cex", "bridge", "mint", "service"}
+SERVICE_FUNDER_MIN = 5          # an address that funded this many candidate wallets is a service, not a person
 
 
 def funder_labels() -> dict[str, tuple[str, str]]:
@@ -160,6 +161,16 @@ async def _co_entries_among(flagged: set[str], since: datetime) -> dict[str, int
     return out
 
 
+async def service_funders() -> set[str]:
+    """Addresses that funded SERVICE_FUNDER_MIN or more candidate wallets:
+    treated like a labelled exchange (never a shared-funder link)."""
+    sf = get_session_factory()
+    async with sf() as s:
+        rows = (await s.execute(text(
+            "SELECT funder FROM ut_wallet_meta WHERE funder IS NOT NULL GROUP BY funder HAVING COUNT(*) >= :n"), {"n": SERVICE_FUNDER_MIN})).scalars().all()
+    return set(rows)
+
+
 async def _shared_funders(flagged: set[str], labels: dict) -> set[str]:
     if not flagged:
         return set()
@@ -168,10 +179,11 @@ async def _shared_funders(flagged: set[str], labels: dict) -> set[str]:
         rows = (await s.execute(text(
             "SELECT wallet, funder FROM ut_wallet_meta WHERE funder IS NOT NULL AND wallet IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"f": sorted(flagged)})).all()
+    services = await service_funders()
     by_f: dict[str, list[str]] = {}
     for w, f in rows:
         kind = labels.get(f, (None, None))[1]
-        if kind in SHARED_FUNDER_SKIP_KINDS:
+        if kind in SHARED_FUNDER_SKIP_KINDS or f in services:
             continue
         by_f.setdefault(f, []).append(w)
     return {w for ws in by_f.values() if len(ws) >= 2 for w in ws}
