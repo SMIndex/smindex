@@ -83,6 +83,16 @@ check("one open position, the flat one dropped", len(ops), 1)
 check("short, notional, leverage, upnl", (ops[0]["side"], ops[0]["notional"], ops[0]["leverage"], ops[0]["upnl"]), ("short", 2100000.0, 40.0, -24000.0))
 check("bad json gives no positions", api.open_positions_from_state("{not json"), [])
 
+print("alert text")
+from app.services.ut import live  # noqa: E402
+msg = live.format_alert({"wallet": "0x" + "a" * 40, "coin": "BTC", "side": "short", "notional": 150000, "level": "strong",
+                         "payload": {"score": 76.2, "hit_rate": 0.5, "hits": 6, "entries": 12, "events_preceded": 3, "misses": 6, "worst_loss_usd": -1200,
+                                     "age_days": 4, "leverage": 20, "win_rate_90d": 0.55, "trips_90d": 40, "net_pnl_90d": 12345.6, "pnl_total": 98765.4,
+                                     "pnl_total_from": "2026-07-31"}})
+check("alert carries win rate and profit", "Win rate 90 d 55% of 40 trips · PnL 90 d $+12,346 · total $+98,765 since 2026-07-31" in msg, True)
+msg2 = live.format_alert({"wallet": "0x" + "a" * 40, "coin": "BTC", "side": "short", "notional": 150000, "level": "watch", "payload": {"score": 57}})
+check("alert without trip data has no win-rate line", "Win rate" in msg2, False)
+
 n_ok, n = sum(checks), len(checks)
 print(f"\n{n_ok}/{n} checks passed")
 sys.exit(0 if n_ok == n else 1)

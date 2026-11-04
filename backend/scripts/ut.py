@@ -205,7 +205,8 @@ async def cmd_alerts_test(args) -> None:
     lines of this delivery."""
     sf = database.get_session_factory()
     payload = {"test": True, "level": "watch", "score": 57.1, "hit_rate": 0.5, "hits": 6, "entries": 12, "events_preceded": 3, "misses": 6,
-               "worst_loss_usd": -1234.5, "age_days": 4, "cluster_id": None, "is_add": False, "leverage": 5}
+               "worst_loss_usd": -1234.5, "age_days": 4, "cluster_id": None, "is_add": False, "leverage": 5,
+               "win_rate_90d": 0.55, "trips_90d": 40, "net_pnl_90d": 12345.6, "pnl_total": 98765.4, "pnl_total_from": "2026-07-31"}
     async with sf() as s:
         r = await s.execute(text(
             "INSERT INTO ut_alerts_sent (wallet, coin, side, notional, level, payload, trade_at, created_at) VALUES "

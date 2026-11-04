@@ -61,7 +61,9 @@ async def _wallet_rows(wallet: str, since: datetime, cutoff: datetime | None) ->
             "SELECT first_deposit_at, first_deposit_usd, first_deposit_kind, funder, funder_label, checked_at, account_value, history_from "
             "FROM ut_wallet_meta WHERE wallet=:w"), {"w": wallet})).first()
         first_fill = (await s.execute(text("SELECT MIN(time) FROM hl_fills WHERE wallet=:w"), {"w": wallet})).scalar()
-    return {"entries": ents, "trips": trips, "meta": meta, "first_fill": first_fill}
+        alltime = (await s.execute(text(
+            "SELECT COUNT(*), SUM(pnl_usd), MIN(open_time) FROM round_trips WHERE venue='hl' AND wallet=:w"), {"w": wallet})).first()
+    return {"entries": ents, "trips": trips, "meta": meta, "first_fill": first_fill, "alltime": alltime}
 
 
 def aggregate(wallet: str, d: dict, labels: dict[str, tuple[str, str]]) -> dict:
@@ -79,6 +81,8 @@ def aggregate(wallet: str, d: dict, labels: dict[str, tuple[str, str]]) -> dict:
     trips = d["trips"]
     pnls = sorted((float(t[4]) for t in trips), reverse=True)
     net = sum(pnls)
+    wins = sum(1 for p in pnls if p > 0)
+    at = d.get("alltime") or (0, None, None)
     top3 = sum(p for p in pnls[:3] if p > 0)
     holds = [(t[3] - t[2]).total_seconds() / 60.0 for t in trips]
     med_hold = median(holds) if holds else None
@@ -107,6 +111,9 @@ def aggregate(wallet: str, d: dict, labels: dict[str, tuple[str, str]]) -> dict:
         "size_shock_on_hit": size_shock, "exit_speed_hits": exit_fast, "misses": n - k,
         "worst_loss_usd": (min(pnls) if pnls else None), "moved_market_count": sum(1 for e in ents if int(e[7] or 0) == 1),
         "top3_profit_share": (top3 / net if net > 0 else None), "funder": funder, "funder_label": flabel, "funder_kind": fkind,
+        # win rate and profit (owner 2026-11-04): closed round trips only, 90 d and since the stored history starts
+        "win_rate_90d": (wins / len(pnls) if pnls else None), "trips_90d": len(pnls), "net_pnl_90d": (round(net, 2) if pnls else None),
+        "pnl_total": (round(float(at[1]), 2) if at and at[1] is not None else None), "pnl_total_from": (at[2].date() if at and at[2] else None),
         "first_deposit_at": first_dep, "first_deposit_usd": (float(meta[1]) if meta and meta[1] is not None else None),
         "first_deposit_kind": (meta[2] if meta else None), "ledger_checked": bool(meta and meta[5]),
         "history_from": (meta[7] if meta else None) or d["first_fill"],
@@ -227,6 +234,12 @@ async def build(as_of: date | None = None, *, cutoff: datetime | None = None, wr
     if not write:
         return {"as_of": str(as_of), "rows": rows, "flagged": flagged}
     sf = get_session_factory()
+    from app.db import migrate as _mig
+    async with sf() as s:
+        for col, ddl in (("win_rate_90d", "DECIMAL(6,4) NULL"), ("trips_90d", "INT NULL"), ("net_pnl_90d", "DECIMAL(20,2) NULL"),
+                         ("pnl_total", "DECIMAL(20,2) NULL"), ("pnl_total_from", "DATE NULL")):
+            await _mig.ddl(s, f"ALTER TABLE ut_wallet_scores ADD COLUMN {col} {ddl}")
+        await s.commit()
     out_rows = []
     for w, r in rows.items():
         ev = dict(r["evidence"])
@@ -242,6 +255,7 @@ async def build(as_of: date | None = None, *, cutoff: datetime | None = None, wr
             "mh": (int(r["median_hold_min"]) if r["median_hold_min"] is not None else None),
             "fl": 1 if r["s4"] else 0, "ss": 1 if r["s5"] else 0, "co": r["co_entries_flagged"], "es": r["exit_speed_hits"],
             "mm": r["moved_market_count"], "mi": r["misses"], "wl": (max(float(r["worst_loss_usd"]), -1e17) if r["worst_loss_usd"] is not None else None),
+            "wr": r["win_rate_90d"], "tr": r["trips_90d"], "np": r["net_pnl_90d"], "pt": r["pnl_total"], "pf": r["pnl_total_from"],
             "s1": int(r["s1"]), "s2": int(r["s2"]), "s3": int(r["s3"]), "s4": int(r["s4"]), "s5": int(r["s5"]), "s6": int(r["s6"]), "s7": int(r["s7"]),
             "ev": json.dumps(ev, default=str), "now": common.now_utc()})
     async with sf() as s:
@@ -250,8 +264,9 @@ async def build(as_of: date | None = None, *, cutoff: datetime | None = None, wr
             await s.execute(text(
                 "INSERT INTO ut_wallet_scores (as_of, wallet, score, level, entries, hits, hit_rate, blended_base_rate, p_value, events_preceded, "
                 "event_kinds, top3_profit_share, median_hold_min, fresh_large, size_shock, co_entries, exit_speed_hits, moved_market_count, misses, "
-                "worst_loss_usd, s1, s2, s3, s4, s5, s6, s7, evidence, computed_at) VALUES (:d, :w, :sc, :lv, :n, :k, :hr, :br, :p, :ep, :ek, :t3, :mh, "
-                ":fl, :ss, :co, :es, :mm, :mi, :wl, :s1, :s2, :s3, :s4, :s5, :s6, :s7, :ev, :now)"), out_rows[i:i + 300])
+                "worst_loss_usd, win_rate_90d, trips_90d, net_pnl_90d, pnl_total, pnl_total_from, s1, s2, s3, s4, s5, s6, s7, evidence, computed_at) "
+                "VALUES (:d, :w, :sc, :lv, :n, :k, :hr, :br, :p, :ep, :ek, :t3, :mh, "
+                ":fl, :ss, :co, :es, :mm, :mi, :wl, :wr, :tr, :np, :pt, :pf, :s1, :s2, :s3, :s4, :s5, :s6, :s7, :ev, :now)"), out_rows[i:i + 300])
         # funder labels and the flagged mark on the meta row
         for w in flagged:
             await s.execute(text("UPDATE ut_wallet_meta SET flagged_at=COALESCE(flagged_at, UTC_TIMESTAMP()) WHERE wallet=:w"), {"w": w})

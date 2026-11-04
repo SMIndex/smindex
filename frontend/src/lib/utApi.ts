@@ -16,6 +16,7 @@ export interface UtRow {
   signals: Record<'s1' | 's2' | 's3' | 's4' | 's5' | 's6' | 's7', boolean>;
   top3_profit_share: number | null; median_hold_min: number | null; co_entries: number; exit_speed_hits: number; event_kinds_n: number;
   account_value: number | null;
+  win_rate_90d: number | null; trips_90d: number | null; net_pnl_90d: number | null; pnl_total: number | null; pnl_total_from: string | null;
 }
 
 export interface UtEntry {

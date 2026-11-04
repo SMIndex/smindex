@@ -18,7 +18,7 @@ const LEVEL_LABEL: Record<UtLevel, string> = { watch: 'Watch', strong: 'Strong',
 const EMPTY_FIRST = 'First scores land after the daily pass';
 
 type Filters = { level: '' | UtLevel; hit: number; ev: number; age: '' | '30' | '90'; coin: string; open: boolean; act: '' | '1' | '24' | '168' };
-type SortKey = 'wallet' | 'score' | 'hit_rate' | 'avg_move_2h' | 'events_preceded' | 'misses' | 'age_days' | 'coins' | 'open' | 'last_entry_at';
+type SortKey = 'wallet' | 'score' | 'hit_rate' | 'avg_move_2h' | 'events_preceded' | 'misses' | 'win_rate_90d' | 'pnl_total' | 'age_days' | 'coins' | 'open' | 'last_entry_at';
 const F0: Filters = { level: '', hit: 0, ev: 0, age: '', coin: '', open: false, act: '' };
 
 const money = (n: number | null | undefined, signed = true): string => {
@@ -147,6 +147,7 @@ export default function UnusualTimingTab({ summary }: { summary: UtSummary | nul
             <Th k="avg_move_2h">Avg move after entry</Th>
             <Th k="events_preceded">Events preceded</Th>
             <Th k="misses">Misses · worst loss</Th>
+            <Th k="win_rate_90d" title="Closed round trips with a profit, last 90 days; total profit since the stored history starts">Win rate · PnL</Th>
             <Th k="age_days">Age · funder</Th>
             <Th k="coins">Coins</Th>
             <Th k="open">Open now</Th>
@@ -167,6 +168,7 @@ export default function UnusualTimingTab({ summary }: { summary: UtSummary | nul
                 <td>{w.avg_move_2h == null ? <span className="sub">n/a</span> : <><span className={`${w.avg_move_2h >= 0 ? 'pos' : 'neg'} num`}>{pctTxt(w.avg_move_2h)}</span> <span className="sub">2 h · {pctTxt(w.avg_move_24h)} 24 h</span></>}</td>
                 <td><b className="num">{w.events_preceded}</b> {w.event_kinds.slice(0, 3).map((e) => <span className="ev" key={e}>{e}</span>)}{w.event_kinds.length > 3 && <span className="sub">+{w.event_kinds.length - 3}</span>}</td>
                 <td className="num">{w.misses} · <span className="neg">{w.worst_loss_usd == null ? 'n/a' : money(Math.min(0, w.worst_loss_usd))}</span></td>
+                <td className="num">{w.win_rate_90d == null ? <span className="sub">no closed trips</span> : <>{rate(w.win_rate_90d)} <span className="sub">of {w.trips_90d}</span> · <span className={(w.pnl_total ?? 0) >= 0 ? 'pos' : 'neg'}>{money(w.pnl_total)}</span></>}</td>
                 <td className="num">{dayTxt(w.age_days, w.age_known)} <span className="sub">{w.funder_label ?? (w.ledger_checked ? 'no deposit found' : 'funder pending')}</span></td>
                 <td>{w.coins.slice(0, 4).join(', ')}{w.coins.length > 4 ? ` +${w.coins.length - 4}` : ''}</td>
                 <td>{w.open ? <><span className={w.open.side === 'short' ? 'neg' : 'pos'}>{w.open.coin} {w.open.side}</span> {money(w.open.notional, false)} <span className="sub">{w.open.leverage ? `${Math.round(w.open.leverage)}x` : ''}</span></> : <span className="sub">none</span>}</td>
@@ -323,6 +325,7 @@ function WalletDrawer({ address, scoresAsOf, liveAt, onWatch, isWatched }: {
         <div className="card"><div className="lab">Events preceded</div><div className="big num">{d.events_preceded}</div><div className="sub">{d.event_kinds_n} kind{d.event_kinds_n !== 1 ? 's' : ''}{d.event_kinds.length ? `: ${d.event_kinds.join(', ')}` : ''}</div></div>
         <div className="card"><div className="lab">Wallet age</div><div className="big num">{dayTxt(d.age_days, d.age_known)}</div><div className="sub">first deposit {d.first_deposit_usd != null ? money(d.first_deposit_usd, false) : 'n/a'} · {d.funder_label ?? (d.ledger_checked ? 'unlabelled' : 'pending')}</div></div>
         <div className="card"><div className="lab">Moved the market</div><div className="big num">{d.moved_market_count} of {nEntries}</div><div className="sub">own size over 20% of 2 h venue volume, not counted as timing</div></div>
+        <div className="card"><div className="lab">Win rate 90 d</div><div className="big num">{d.win_rate_90d == null ? 'n/a' : rate(d.win_rate_90d)}</div><div className="sub">{d.trips_90d ?? 0} closed round trips · total {money(d.pnl_total)}{d.pnl_total_from ? ` since ${d.pnl_total_from}` : ''}</div></div>
       </div>
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
@@ -367,6 +370,8 @@ function WalletDrawer({ address, scoresAsOf, liveAt, onWatch, isWatched }: {
             <div className="kv"><span>Misses</span><span className="num">{d.misses} of {nEntries}</span></div>
             <div className="kv"><span>Worst loss</span><span className="neg num">{d.worst_loss_usd == null ? 'n/a' : money(Math.min(0, d.worst_loss_usd))}</span></div>
             <div className="kv"><span>Net profit 90 d</span><span className={`num ${(d.net_profit_90d ?? 0) >= 0 ? 'pos' : 'neg'}`}>{money(d.net_profit_90d)}</span></div>
+            <div className="kv"><span>Total profit{d.pnl_total_from ? ` since ${d.pnl_total_from}` : ''}</span><span className={`num ${(d.pnl_total ?? 0) >= 0 ? 'pos' : 'neg'}`}>{money(d.pnl_total)}</span></div>
+            <div className="kv"><span>Win rate 90 d</span><span className="num">{d.win_rate_90d == null ? 'n/a' : `${rate(d.win_rate_90d)} of ${d.trips_90d}`}</span></div>
             <div className="kv"><span>Median leverage</span><span className="num">{d.median_leverage != null ? `${Math.round(d.median_leverage)}x` : 'n/a'}</span></div>
             <div className="kv"><span>Liquidations</span><span className="num">{d.liquidations}</span></div>
           </div>

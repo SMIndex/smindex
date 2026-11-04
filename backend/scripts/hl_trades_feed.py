@@ -739,7 +739,8 @@ async def ut_reload_loop():
             async with Session() as s:
                 rows = (await s.execute(text(
                     "SELECT w.wallet, w.level, w.score, w.hit_rate, w.hits, w.entries, w.events_preceded, w.misses, w.worst_loss_usd, "
-                    "w.cluster_id, m.first_deposit_at, (SELECT member_count FROM ut_clusters c WHERE c.id = w.cluster_id) "
+                    "w.cluster_id, m.first_deposit_at, (SELECT member_count FROM ut_clusters c WHERE c.id = w.cluster_id), "
+                    "w.win_rate_90d, w.trips_90d, w.net_pnl_90d, w.pnl_total, w.pnl_total_from "
                     "FROM ut_wallet_scores w LEFT JOIN ut_wallet_meta m ON m.wallet = w.wallet "
                     "WHERE w.as_of = (SELECT MAX(as_of) FROM ut_wallet_scores) AND w.level <> 'none'"))).all()
                 if not ut_last:
@@ -748,11 +749,14 @@ async def ut_reload_loop():
                         ut_last[(w, c)] = time.monotonic() - (time.time() - at.timestamp())
             new = {}
             now = time.time()
-            for w, lvl, sc, hr, k, n, ep, mi, wl, cid, fd, csize in rows:
+            for w, lvl, sc, hr, k, n, ep, mi, wl, cid, fd, csize, wr, tr, np_, pt, pf in rows:
                 w = w.lower()
                 new[w] = {"level": lvl, "score": float(sc or 0), "hit_rate": (float(hr) if hr is not None else None), "hits": k, "entries": n,
                           "events_preceded": ep, "misses": mi, "worst_loss_usd": (float(wl) if wl is not None else None), "cluster_id": cid,
-                          "cluster_size": csize, "age_days": (round((now - fd.timestamp()) / 86400.0, 1) if fd else None)}
+                          "cluster_size": csize, "age_days": (round((now - fd.timestamp()) / 86400.0, 1) if fd else None),
+                          "win_rate_90d": (float(wr) if wr is not None else None), "trips_90d": tr,
+                          "net_pnl_90d": (float(np_) if np_ is not None else None), "pnl_total": (float(pt) if pt is not None else None),
+                          "pnl_total_from": (str(pf) if pf else None)}
                 acct_of.setdefault(w, w)
                 accts_of.setdefault(w, [w])
             if set(new) != set(ut_flagged):

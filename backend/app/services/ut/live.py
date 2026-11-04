@@ -55,6 +55,13 @@ def format_alert(row: dict) -> str:
         f"Events preceded {p.get('events_preceded', 0)} · misses {p.get('misses', 'n/a')} · worst loss ${float(p.get('worst_loss_usd') or 0):,.0f}",
         f"Wallet age {age_s} · {cl_s}",
     ]
+    # win rate and profit (owner 2026-11-04): closed round trips, 90 days and since the stored history starts
+    wr = p.get("win_rate_90d")
+    if wr is not None or p.get("pnl_total") is not None:
+        wr_s = f"{float(wr) * 100:.0f}% of {p.get('trips_90d') or 0} trips" if wr is not None else "n/a"
+        np_s = f"${float(p['net_pnl_90d']):+,.0f}" if p.get("net_pnl_90d") is not None else "n/a"
+        pt_s = (f"${float(p['pnl_total']):+,.0f} since {p.get('pnl_total_from') or 'history start'}" if p.get("pnl_total") is not None else "n/a")
+        lines.append(f"Win rate 90 d {wr_s} · PnL 90 d {np_s} · total {pt_s}")
     if p.get("test"):
         lines.insert(0, "<b>[test]</b> sample alert from <code>ut alerts test</code>")
     return "\n".join(lines)

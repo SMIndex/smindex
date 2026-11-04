@@ -65,6 +65,7 @@ DDL = [
     " size_shock TINYINT(1) NOT NULL DEFAULT 0, co_entries INT NOT NULL DEFAULT 0, cluster_id INT NULL,"
     " exit_speed_hits INT NOT NULL DEFAULT 0, moved_market_count INT NOT NULL DEFAULT 0,"
     " misses INT NOT NULL DEFAULT 0, worst_loss_usd DECIMAL(20,2) NULL,"
+    " win_rate_90d DECIMAL(6,4) NULL, trips_90d INT NULL, net_pnl_90d DECIMAL(20,2) NULL, pnl_total DECIMAL(20,2) NULL, pnl_total_from DATE NULL,"
     " s1 TINYINT(1) NOT NULL DEFAULT 0, s2 TINYINT(1) NOT NULL DEFAULT 0, s3 TINYINT(1) NOT NULL DEFAULT 0, s4 TINYINT(1) NOT NULL DEFAULT 0,"
     " s5 TINYINT(1) NOT NULL DEFAULT 0, s6 TINYINT(1) NOT NULL DEFAULT 0, s7 TINYINT(1) NOT NULL DEFAULT 0,"
     " excluded VARCHAR(40) NULL, evidence JSON NULL, computed_at DATETIME NOT NULL,"

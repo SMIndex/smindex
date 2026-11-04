@@ -16,7 +16,8 @@ from sqlalchemy import bindparam, text
 from app.db.database import get_session_factory
 
 LEVELS = ("watch", "strong", "cluster")
-SORT_KEYS = {"score", "hit_rate", "avg_move_2h", "events_preceded", "misses", "age_days", "coins", "open", "last_entry_at", "wallet", "hits"}
+SORT_KEYS = {"score", "hit_rate", "avg_move_2h", "events_preceded", "misses", "age_days", "coins", "open", "last_entry_at", "wallet", "hits",
+             "win_rate_90d", "pnl_total", "net_pnl_90d"}
 EVENT_WORDS = {"big_move": "big move", "funding_flip": "funding flip", "macro": "macro", "listing": "listing", "delisting": "delisting", "manual": "manual"}
 LEVEL_WORDS = {
     "watch": "Unusual timing on several trades. Could be skill.",
@@ -165,6 +166,7 @@ async def build_rows(*, flagged_only: bool = True) -> dict:
         q = ("SELECT w.wallet, w.level, w.score, w.hits, w.entries, w.hit_rate, w.blended_base_rate, w.p_value, w.events_preceded, w.event_kinds, "
              "w.misses, w.worst_loss_usd, w.cluster_id, w.moved_market_count, w.evidence, w.top3_profit_share, w.median_hold_min, w.fresh_large, "
              "w.size_shock, w.co_entries, w.exit_speed_hits, w.s1, w.s2, w.s3, w.s4, w.s5, w.s6, w.s7, "
+             "w.win_rate_90d, w.trips_90d, w.net_pnl_90d, w.pnl_total, w.pnl_total_from, "
              "m.first_deposit_at, m.funder_label, m.funder, m.first_deposit_usd, m.account_value, m.checked_at "
              "FROM ut_wallet_scores w LEFT JOIN ut_wallet_meta m ON m.wallet=w.wallet WHERE w.as_of=:d")
         if flagged_only:
@@ -218,6 +220,8 @@ async def build_rows(*, flagged_only: bool = True) -> dict:
             "top3_profit_share": _f(r["top3_profit_share"]), "median_hold_min": r["median_hold_min"], "co_entries": int(r["co_entries"] or 0),
             "exit_speed_hits": int(r["exit_speed_hits"] or 0), "event_kinds_n": int(r["event_kinds"] or 0),
             "evidence": ev, "account_value": _f(r["account_value"]),
+            "win_rate_90d": _f(r["win_rate_90d"]), "trips_90d": r["trips_90d"], "net_pnl_90d": _f(r["net_pnl_90d"]),
+            "pnl_total": _f(r["pnl_total"]), "pnl_total_from": (str(r["pnl_total_from"]) if r["pnl_total_from"] else None),
         })
     return {"as_of": str(as_of), "rows": out, "scored": int(scored or 0), "built_at": _iso(datetime.utcnow())}
 
