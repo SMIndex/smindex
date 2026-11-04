@@ -46,12 +46,12 @@ async def load_candles(coin: str, tf: str, t0: datetime, t1: datetime) -> list[d
     sf = get_session_factory()
     async with sf() as s:
         rows = (await s.execute(text(
-            "SELECT t, o, h, l, c, v FROM ut_candles WHERE coin=:c AND tf=:tf AND t >= :a AND t < :b ORDER BY t"),
+            "SELECT t, o, h, l, c, v, src FROM ut_candles WHERE coin=:c AND tf=:tf AND t >= :a AND t < :b ORDER BY t"),
             {"c": coin, "tf": tf, "a": t0, "b": t1})).all()
     out = []
-    for t, o, h, l, c, v in rows:
+    for t, o, h, l, c, v, src in rows:
         tm = rt.dt_to_ms(t)
-        out.append({"t": tm, "T": tm + step - 1, "o": float(o), "h": float(h), "l": float(l), "c": float(c), "v": float(v or 0)})
+        out.append({"t": tm, "T": tm + step - 1, "o": float(o), "h": float(h), "l": float(l), "c": float(c), "v": float(v or 0), "src": src or "hl"})
     return out
 
 

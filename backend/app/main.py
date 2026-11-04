@@ -1485,6 +1485,9 @@ def create_app() -> FastAPI:
     from app.routers.featured import router as featured_router, admin_router as featured_admin_router, Forbidden as _FeaturedForbidden
     app.include_router(featured_router, prefix="/api")
     app.include_router(featured_admin_router, prefix="/api")
+    # Unusual timing page (phase 2): read-only, same whitelist gate as Featured
+    from app.routers.ut import router as ut_router
+    app.include_router(ut_router, prefix="/api")
 
     @app.exception_handler(_FeaturedForbidden)
     async def _featured_forbidden(request, exc):

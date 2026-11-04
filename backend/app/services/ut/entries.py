@@ -264,7 +264,9 @@ async def compute_forward(coins: list[str] | None = None, *, cutoff: datetime | 
             use_1m = (m1_from is not None and tm >= m1_from and tm + 2 * 3_600_000 <= (m1_to or 0) + 60_000
                       and len(rules.window(c1m, ts1m, tm, tm + 2 * 3_600_000)) >= 84)
             fm = rules.forward_moves(float(px), side, tm, c1m if use_1m else c1h, ts1m if use_1m else ts1h)
-            vol = rules.volume_after(c1h, tm, ts=ts1h) or rules.volume_after(c1m, tm, ts=ts1m)
+            # moved-market divides by the VENUE 2 h volume (owner, 2026-11-04): only bars read from
+            # Hyperliquid count; a window covered by fills-built bars has no venue volume, so no flag
+            vol = rules.volume_after(c1h, tm, ts=ts1h, venue_only=True)
             moved = rules.moved_market(float(notional), vol)
             hit = rules.is_hit(fm["mfe_2h"], st["thr"], moved_market_flag=moved)
             ev_id, mins = _nearest_event(events, tm, side)

@@ -116,9 +116,14 @@ def window(candles: list[dict], ts: list[int] | None, t0: int, t1: int) -> list[
     return sorted((c for c in candles if t0 <= int(c["t"]) < t1), key=lambda c: int(c["t"]))
 
 
-def volume_after(candles: list[dict], t0: int, horizon_ms: int = H2, ts: list[int] | None = None) -> float | None:
+def volume_after(candles: list[dict], t0: int, horizon_ms: int = H2, ts: list[int] | None = None, venue_only: bool = False) -> float | None:
+    """USD volume of the bars in the horizon after t0. With venue_only, only
+    bars read from the venue (src 'hl') count and the window must be made
+    of them entirely; otherwise None (unknown volume never flags)."""
     win = window(candles, ts, t0, t0 + horizon_ms)
     if not win:
+        return None
+    if venue_only and any(c.get("src", "hl") != "hl" for c in win):
         return None
     return sum(float(c.get("v") or 0) * float(c["c"]) for c in win)
 
