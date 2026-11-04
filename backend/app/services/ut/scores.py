@@ -225,9 +225,11 @@ async def build(as_of: date | None = None, *, cutoff: datetime | None = None, wr
         out_rows.append({
             "d": as_of, "w": w, "sc": r["score"], "lv": r["level"], "n": r["entries"], "k": r["hits"], "hr": r["hit_rate"],
             "br": round(r["blended_base_rate"], 6), "p": r["p_value"], "ep": r["events_preceded"], "ek": r["event_kinds"],
-            "t3": r["top3_profit_share"], "mh": (int(r["median_hold_min"]) if r["median_hold_min"] is not None else None),
+            # DECIMAL(6,4): a tiny positive net profit makes the top-3 share huge; stored capped, the S3 test used the raw ratio
+            "t3": (min(float(r["top3_profit_share"]), 99.9999) if r["top3_profit_share"] is not None else None),
+            "mh": (int(r["median_hold_min"]) if r["median_hold_min"] is not None else None),
             "fl": 1 if r["s4"] else 0, "ss": 1 if r["s5"] else 0, "co": r["co_entries_flagged"], "es": r["exit_speed_hits"],
-            "mm": r["moved_market_count"], "mi": r["misses"], "wl": r["worst_loss_usd"],
+            "mm": r["moved_market_count"], "mi": r["misses"], "wl": (max(float(r["worst_loss_usd"]), -1e17) if r["worst_loss_usd"] is not None else None),
             "s1": int(r["s1"]), "s2": int(r["s2"]), "s3": int(r["s3"]), "s4": int(r["s4"]), "s5": int(r["s5"]), "s6": int(r["s6"]), "s7": int(r["s7"]),
             "ev": json.dumps(ev, default=str), "now": common.now_utc()})
     async with sf() as s:
