@@ -1085,6 +1085,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("migration v33 (featured traders) FAILED: %s", exc)
 
+    # --- migration v34: Unusual Timing (unusual-timing brief, 2026-11-04) ----
+    try:
+        from app.services.ut.schema import DDL as _UT_DDL
+        async with _dbm.engine.begin() as conn:
+            for _stmt in _UT_DDL:
+                await conn.execute(text(_stmt))
+        if not getattr(app.state, "_v34_logged", False):
+            logger.info("migration v34: unusual timing tables present")
+        app.state._v34_logged = True
+    except Exception as exc:
+        logger.warning("migration v34 (unusual timing) FAILED: %s", exc)
+
     # Startup cleanup: liquidation_snapshots only needs the latest few rows per
     # market. The periodic pruning in liquidation_calc keeps it tight going
     # forward, but if rows accumulated (e.g. from before the pruning was added),
@@ -1275,6 +1287,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("featured traders FAILED to start: %s", exc)
 
+    # Unusual Timing (unusual-timing brief): the Hyperliquid reader under the
+    # background budget and the admin alert poller; the compute runs in the
+    # smindex-ut worker process
+    try:
+        from app.services.ut import jobs as _ujobs, live as _ulive
+        app.state.ut_stop = _aio_mm.Event()
+        _ujobs.start(app.state.ut_stop)
+        _ulive.start(app.state.ut_stop)
+    except Exception as exc:
+        logger.warning("unusual timing FAILED to start: %s", exc)
+
     # Warm the Perpl market registry once at boot (non-fatal): consumers that
     # read the cache directly (e.g. the analytics context endpoint's
     # Perpl-mapping, which must not fetch on the request path) otherwise see
@@ -1327,6 +1350,16 @@ async def lifespan(app: FastAPI):
         await _flive.stop_task()
     except Exception as exc:
         logger.warning("featured traders stop: %s", exc)
+
+    # Unusual Timing: reader + alert poller
+    try:
+        if getattr(app.state, "ut_stop", None) is not None:
+            app.state.ut_stop.set()
+        from app.services.ut import jobs as _ujobs, live as _ulive
+        await _ujobs.stop()
+        await _ulive.stop_task()
+    except Exception as exc:
+        logger.warning("unusual timing stop: %s", exc)
 
     # Stop Telegram bot
     if getattr(app.state, "strat_outbox_stop", None) is not None:

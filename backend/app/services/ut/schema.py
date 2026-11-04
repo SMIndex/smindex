@@ -8,8 +8,9 @@ section 1, plus three small tables the brief does not name:
     perps, spot pairs) so a coin that appears or disappears becomes a listing
     or delisting event; first_seen for coins already present at the first
     snapshot comes from their first candle
-  * ut_candle_wants: coins the worker wants 1 m candles for (coins traded by
-    flagged wallets); the API reader serves the list on its next pass
+  * ut_queue: reads the worker asks the API reader to spend Hyperliquid
+    weight on (ledger updates of a wallet, fills of a feed wallet, 1 m
+    candles of a coin flagged wallets trade); the reader serves it in order
 """
 
 DDL = [
@@ -51,6 +52,8 @@ DDL = [
     " first_deposit_tx CHAR(66) NULL, first_deposit_kind VARCHAR(24) NULL, funder CHAR(42) NULL, funder_label VARCHAR(64) NULL,"
     " funder_checked_at DATETIME NULL, first_fill_at DATETIME NULL, history_from DATETIME NULL,"
     " is_mm TINYINT(1) NOT NULL DEFAULT 0, is_vault TINYINT(1) NOT NULL DEFAULT 0, ledger_items INT NULL,"
+    " maker_share DECIMAL(6,4) NULL, median_hold_sec INT NULL, account_value DECIMAL(20,2) NULL, entries_cursor DATETIME(3) NULL,"
+    " excluded VARCHAR(24) NULL, candidate_src VARCHAR(16) NULL, flagged_at DATETIME NULL,"
     " checked_at DATETIME NULL, KEY ix_funder (funder)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
     "CREATE TABLE IF NOT EXISTS ut_wallet_scores ("
@@ -82,11 +85,21 @@ DDL = [
     " UNIQUE KEY ux_co (wallet_a, wallet_b, coin, side, time_a), KEY ix_pair (wallet_a, wallet_b))"
     " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
+    # oi / funding / mark are the hourly raw snapshot (metaAndAssetCtxs) the
+    # API reader writes; the worker fills the derived columns from them
     "CREATE TABLE IF NOT EXISTS ut_market_drift ("
-    " coin VARCHAR(32) NOT NULL, t DATETIME NOT NULL, funding_trend_48h DECIMAL(12,8) NULL, oi_change_6h DECIMAL(8,4) NULL,"
+    " coin VARCHAR(32) NOT NULL, t DATETIME NOT NULL, oi DECIMAL(24,4) NULL, funding DECIMAL(14,10) NULL, mark DECIMAL(24,8) NULL,"
+    " funding_trend_48h DECIMAL(14,10) NULL, oi_change_6h DECIMAL(8,4) NULL,"
     " oi_change_24h DECIMAL(8,4) NULL, abn_ret_12h DECIMAL(8,4) NULL, ut_wallets_6h INT NOT NULL DEFAULT 0,"
     " drift_score DECIMAL(5,2) NOT NULL DEFAULT 0, PRIMARY KEY (coin, t), KEY ix_t (t, drift_score))"
     " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+
+    # work the worker asks the API reader to do with the Hyperliquid budget:
+    # kind 'ledger' (wallet), 'fills' (wallet: feed wallet over $250K with no
+    # stored fills), 'candles_1m' (coin)
+    "CREATE TABLE IF NOT EXISTS ut_queue ("
+    " kind VARCHAR(12) NOT NULL, item VARCHAR(42) NOT NULL, queued_at DATETIME NOT NULL, done_at DATETIME NULL,"
+    " note VARCHAR(120) NULL, PRIMARY KEY (kind, item), KEY ix_pending (kind, done_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
     "CREATE TABLE IF NOT EXISTS ut_alerts_sent ("
     " id INT AUTO_INCREMENT PRIMARY KEY, wallet CHAR(42) NOT NULL, coin VARCHAR(32) NOT NULL, side ENUM('long','short') NOT NULL,"
@@ -105,7 +118,4 @@ DDL = [
     " last_seen DATETIME NOT NULL, first_seen_src ENUM('snapshot','candle') NOT NULL DEFAULT 'snapshot')"
     " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 
-    "CREATE TABLE IF NOT EXISTS ut_candle_wants ("
-    " coin VARCHAR(32) NOT NULL PRIMARY KEY, wanted_at DATETIME NOT NULL, served_at DATETIME NULL)"
-    " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 ]

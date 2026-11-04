@@ -7,6 +7,7 @@ Times are epoch milliseconds, prices floats, percentages in percent.
 """
 from __future__ import annotations
 
+import bisect
 import math
 from collections import defaultdict
 from statistics import median
@@ -100,18 +101,41 @@ def merge_entries(fills: list[dict]) -> list[dict]:
 # forward moves from candles
 # ---------------------------------------------------------------------------
 
-def forward_moves(entry_px: float, side: str, t0: int, candles: list[dict]) -> dict:
+def sorted_candles(candles: list[dict]) -> tuple[list[dict], list[int]]:
+    """Bars sorted by start time plus the list of start times, for the
+    bisect fast path of forward_moves and volume_after."""
+    rows = sorted(candles, key=lambda c: int(c["t"]))
+    return rows, [int(c["t"]) for c in rows]
+
+
+def window(candles: list[dict], ts: list[int] | None, t0: int, t1: int) -> list[dict]:
+    """Bars with t0 <= t < t1. With ts (from sorted_candles) it is a bisect
+    slice; without, a scan of unsorted input."""
+    if ts is not None:
+        return candles[bisect.bisect_left(ts, t0):bisect.bisect_left(ts, t1)]
+    return sorted((c for c in candles if t0 <= int(c["t"]) < t1), key=lambda c: int(c["t"]))
+
+
+def volume_after(candles: list[dict], t0: int, horizon_ms: int = H2, ts: list[int] | None = None) -> float | None:
+    win = window(candles, ts, t0, t0 + horizon_ms)
+    if not win:
+        return None
+    return sum(float(c.get("v") or 0) * float(c["c"]) for c in win)
+
+
+def forward_moves(entry_px: float, side: str, t0: int, candles: list[dict], ts: list[int] | None = None) -> dict:
     """MFE and close-to-close return at 30 m, 2 h and 24 h after t0, in
     percent in the trade's direction, from candles {t, T, h, l, c} (ms, start
     and end). Only candles that START at or after t0 count, so the bar that
     holds the entry (and the prices before it) is never credited; a horizon
     with no such bar inside it gives None. peak_at_2h is the start time of
-    the bar holding the 2 h extreme."""
+    the bar holding the 2 h extreme. Pass ts from sorted_candles to skip the
+    per-call scan."""
     out = {"mfe_30m": None, "mfe_2h": None, "mfe_24h": None, "ret_30m": None, "ret_2h": None, "ret_24h": None, "peak_at_2h": None}
     if entry_px <= EPS:
         return out
     long = side == "long"
-    rows = sorted((c for c in candles if int(c["t"]) >= t0 and int(c["t"]) < t0 + H24), key=lambda c: int(c["t"]))
+    rows = window(candles, ts, t0, t0 + H24)
     for name, h in HORIZONS.items():
         win = [c for c in rows if int(c["t"]) < t0 + h]
         if not win:

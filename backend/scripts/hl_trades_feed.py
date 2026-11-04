@@ -147,6 +147,21 @@ cp_accts: dict[str, str] = {}      # account -> master, for counterparty counts
 cp_counts: dict[tuple[str, str, str], int] = {}   # (master, other, day) -> n
 feat_stats = {"closed": 0, "close_reads": 0, "close_fail": 0, "lat": []}
 
+# Unusual Timing (unusual-timing brief, 2026-11-04): flagged wallets (latest
+# ut_wallet_scores, level watch / strong / cluster) are matched here; an open
+# or add over UT_MIN_NOTIONAL queues one admin alert row (ut_alerts_sent,
+# sent by the API's poller to the admin chat only), one per wallet per coin
+# per UT_DEBOUNCE_SEC. Whether a trade opens or adds is read from the tracked
+# position (pos_szi); when that is not known yet the trade waits for the
+# position read and is checked against it.
+UT_MIN_NOTIONAL = float(os.environ.get("UT_ALERT_MIN_USD", "100000"))
+UT_DEBOUNCE_SEC = 600
+UT_RELOAD_SEC = 60
+ut_flagged: dict[str, dict] = {}   # master -> {level, score, hit_rate, hits, entries, events_preceded, misses, worst_loss_usd, age_days, cluster_id, cluster_size}
+ut_last: dict[tuple[str, str], float] = {}   # (wallet, coin) -> monotonic of the last alert
+ut_pending: dict[str, list] = {}   # wallet -> [(tm, coin, delta, px)] waiting for a position read
+ut_stats = {"trades": 0, "alerts": 0, "debounced": 0, "reduces": 0, "pending": 0, "dropped": 0}
+
 
 async def info(body: dict):
     """One paced Hyperliquid info read. Sleeps after each call in proportion to its
@@ -591,16 +606,24 @@ async def pos_read(w: str, item: list) -> None:
     now_ms = int(time.time() * 1000)
     st_ms = int(body.get("time") or now_ms)
     szi: dict[str, float] = {}
+    lev: dict[str, float] = {}
     for ap in body.get("assetPositions") or []:
         p = ap.get("position") or {}
         v = float(p.get("szi") or 0)
         if v:
             szi[str(p.get("coin"))] = v
+            try:
+                lev[str(p.get("coin"))] = float((p.get("leverage") or {}).get("value") or 0) or None
+            except (TypeError, ValueError):
+                pass
+    pos_lev[w] = lev
     markets = [{"symbol": c, "side": "long" if v > 0 else "short"} for c, v in szi.items()]
     if w in feat_acct:
         featured_positions(w, body, szi, st_ms)
     pos_szi[w] = dict(szi)
     pos_state_ms[w] = st_ms
+    if w in ut_pending:
+        ut_resolve(w, szi, st_ms)
     changed_at = None
     # trades that arrived while the read was in flight and are newer than the
     # state (several fills of one order share a millisecond: no dedupe by time)
@@ -704,6 +727,108 @@ async def watch_loop():
                         len(subscribed), len(probe_subs))
             pos_stats.update({"reads": 0, "weight": 0, "r429": 0, "errors": 0, "lat": {}, "by": {}})
             last_stats = time.monotonic()
+
+
+# ---- unusual timing ----------------------------------------------------------
+
+async def ut_reload_loop():
+    """Flagged wallets every UT_RELOAD_SEC; they join the tracked set so
+    their positions are read like any listed wallet's."""
+    while True:
+        try:
+            async with Session() as s:
+                rows = (await s.execute(text(
+                    "SELECT w.wallet, w.level, w.score, w.hit_rate, w.hits, w.entries, w.events_preceded, w.misses, w.worst_loss_usd, "
+                    "w.cluster_id, m.first_deposit_at, (SELECT member_count FROM ut_clusters c WHERE c.id = w.cluster_id) "
+                    "FROM ut_wallet_scores w LEFT JOIN ut_wallet_meta m ON m.wallet = w.wallet "
+                    "WHERE w.as_of = (SELECT MAX(as_of) FROM ut_wallet_scores) AND w.level <> 'none'"))).all()
+                if not ut_last:
+                    for w, c, at in (await s.execute(text(
+                            "SELECT wallet, coin, created_at FROM ut_alerts_sent WHERE created_at >= UTC_TIMESTAMP() - INTERVAL 10 MINUTE"))).all():
+                        ut_last[(w, c)] = time.monotonic() - (time.time() - at.timestamp())
+            new = {}
+            now = time.time()
+            for w, lvl, sc, hr, k, n, ep, mi, wl, cid, fd, csize in rows:
+                w = w.lower()
+                new[w] = {"level": lvl, "score": float(sc or 0), "hit_rate": (float(hr) if hr is not None else None), "hits": k, "entries": n,
+                          "events_preceded": ep, "misses": mi, "worst_loss_usd": (float(wl) if wl is not None else None), "cluster_id": cid,
+                          "cluster_size": csize, "age_days": (round((now - fd.timestamp()) / 86400.0, 1) if fd else None)}
+                acct_of.setdefault(w, w)
+                accts_of.setdefault(w, [w])
+            if set(new) != set(ut_flagged):
+                logger.info("hl trades feed: unusual-timing wallets now %d", len(new))
+            ut_flagged.clear()
+            ut_flagged.update(new)
+        except Exception as exc:
+            logger.warning("hl trades feed: ut reload failed: %s", exc)
+        await asyncio.sleep(UT_RELOAD_SEC)
+
+
+def ut_on_trade(w: str, coin: str, d: float, px: float, tm: int) -> None:
+    """One trade of a flagged wallet: d signed size (buy +), px price."""
+    ut_stats["trades"] += 1
+    notional = abs(d) * px
+    if notional < UT_MIN_NOTIONAL or px <= 0:
+        return
+    sz = pos_szi.get(w)
+    if sz is None:
+        buf = ut_pending.setdefault(w, [])
+        buf.append((tm, coin, d, px))
+        ut_pending[w] = buf[-20:]
+        ut_stats["pending"] += 1
+        if coin in main_coins:
+            schedule(w, "new", tm, int(time.time() * 1000))
+        return
+    before = sz.get(coin, 0.0)
+    if before == 0.0 or before * d > 0:
+        ut_alert(w, coin, d, px, tm, is_add=(before != 0.0))
+    else:
+        ut_stats["reduces"] += 1
+
+
+def ut_resolve(w: str, szi: dict[str, float], st_ms: int) -> None:
+    """Pending trades of w against the position just read: the trade opened
+    or added when the position now holds it on the same side."""
+    buf = ut_pending.pop(w, None)
+    if not buf:
+        return
+    for tm, coin, d, px in buf:
+        if st_ms - tm > 120_000:
+            ut_stats["dropped"] += 1
+            continue
+        post = szi.get(coin, 0.0)
+        if post * d > 0 and abs(post) >= abs(d) * 0.99:
+            ut_alert(w, coin, d, px, tm, is_add=(abs(post) > abs(d) * 1.01))
+        else:
+            ut_stats["reduces"] += 1
+
+
+def ut_alert(w: str, coin: str, d: float, px: float, tm: int, *, is_add: bool) -> None:
+    now = time.monotonic()
+    last = ut_last.get((w, coin))
+    if last is not None and now - last < UT_DEBOUNCE_SEC:
+        ut_stats["debounced"] += 1
+        return
+    ut_last[(w, coin)] = now
+    info = ut_flagged.get(w) or {}
+    payload = {**info, "is_add": is_add, "size": abs(d), "px": px, "leverage": (pos_lev.get(w) or {}).get(coin), "trade_ms": tm}
+    side = "long" if d > 0 else "short"
+    ut_stats["alerts"] += 1
+    asyncio.create_task(ut_write_alert(w, coin, side, abs(d) * px, str(info.get("level") or "watch"), payload, tm))
+
+
+async def ut_write_alert(w: str, coin: str, side: str, notional: float, level: str, payload: dict, tm: int) -> None:
+    try:
+        async with Session() as s:
+            await s.execute(text(
+                "INSERT INTO ut_alerts_sent (wallet, coin, side, notional, level, payload, trade_at, created_at) "
+                "VALUES (:w, :c, :s, :n, :l, :p, FROM_UNIXTIME(:tm / 1000), UTC_TIMESTAMP(3))"),
+                {"w": w, "c": coin, "s": side, "n": round(notional, 2), "l": level, "p": json.dumps(payload, default=str), "tm": tm})
+            await s.commit()
+        logger.info("hl trades feed: unusual-timing alert queued %s %s %s $%.0f (%s), %.1f s after the trade",
+                    w[:10], coin, side, notional, level, time.time() - tm / 1000.0)
+    except Exception as exc:
+        logger.warning("hl trades feed: ut alert write failed for %s %s: %s", w[:10], coin, exc)
 
 
 # ---- featured traders --------------------------------------------------------
@@ -977,6 +1102,10 @@ async def ws_loop():
                                 coin_dirty.add(coin)
                         if len(users) >= 2 and tm >= keep_cut:
                             count_counterparty(users[0], users[1], tm)
+                        if ut_flagged and now_ms - tm < 60_000 and not rt.is_spot_coin(coin):
+                            for i, u in enumerate(users[:2]):
+                                if u in ut_flagged:
+                                    ut_on_trade(u, coin, float(t.get("sz") or 0) * (1 if i == 0 else -1), float(t.get("px") or 0), tm)
                         if coin in main_coins and now_ms - tm < 60_000:
                             for i, u in enumerate(users[:2]):
                                 if u in accts_of or u in watch:
@@ -1016,7 +1145,7 @@ async def main():
     tasks = [asyncio.create_task(ws_loop()), asyncio.create_task(write_loop()), asyncio.create_task(refresh_loop()),
              asyncio.create_task(probe_loop()), asyncio.create_task(pos_loop()), asyncio.create_task(pos_sweep_loop()),
              asyncio.create_task(watch_loop()), asyncio.create_task(featured_reload_loop()),
-             asyncio.create_task(featured_close_loop())]
+             asyncio.create_task(featured_close_loop()), asyncio.create_task(ut_reload_loop())]
     await refresh_accounts(wallets, with_subs=True)     # sub-accounts while the feed already runs
     tasks.append(asyncio.create_task(unseen_loop()))
     await asyncio.gather(*tasks)
