@@ -138,9 +138,11 @@ async def listings(first_snapshot: datetime | None) -> int:
     sf = get_session_factory()
     async with sf() as s:
         uni = (await s.execute(text("SELECT coin, kind, first_seen, last_seen, first_seen_src FROM ut_universe"))).all()
-        firsts = dict((await s.execute(text("SELECT coin, MIN(t) FROM ut_candles WHERE tf='1h' GROUP BY coin"))).all())
+        # only bars read from the venue date a listing: a bar built from fills
+        # starts when the first candidate traded, not when the coin appeared
+        firsts = dict((await s.execute(text("SELECT coin, MIN(t) FROM ut_candles WHERE tf='1h' AND src='hl' GROUP BY coin"))).all())
         latest = (await s.execute(text("SELECT MAX(last_seen) FROM ut_universe"))).scalar()
-        cmin = (await s.execute(text("SELECT MIN(t) FROM ut_candles WHERE tf='1h'"))).scalar()
+        cmin = (await s.execute(text("SELECT MIN(t) FROM ut_candles WHERE tf='1h' AND src='hl'"))).scalar()
     rows = []
     moves = []
     for coin, kind, fs, ls, src in uni:
