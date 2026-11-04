@@ -150,7 +150,7 @@ async def _co_entries_among(flagged: set[str], since: datetime) -> dict[str, int
     sf = get_session_factory()
     async with sf() as s:
         rows = (await s.execute(text(
-            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND wallet_a IN :f AND wallet_b IN :f"
+            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND crowd = 0 AND wallet_a IN :f AND wallet_b IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": sorted(flagged)})).all()
     counts = await _cl.entry_counts(sorted(flagged), since)
     edges = rules.coentry_edges([(a, b, c, sd, common.ms(ta), common.ms(tb), bool(oe)) for a, b, c, sd, ta, tb, oe in rows], counts=counts)

@@ -33,26 +33,33 @@ async def coentries(since: datetime) -> dict:
         flagged = set((await s.execute(text("SELECT wallet FROM ut_wallet_meta WHERE flagged_at IS NOT NULL"))).scalars().all())
         await s.execute(text("DELETE FROM ut_coentries WHERE time_a < :a"), {"a": since})
         await s.commit()
-    total = capped = 0
+    total = capped = crowd_marked = crowd_pairs = 0
+    from app.db import migrate as _mig
+    async with sf() as s:
+        await _mig.ddl(s, "ALTER TABLE ut_coentries ADD COLUMN crowd TINYINT(1) NOT NULL DEFAULT 0")
+        await s.commit()
     for coin in coins:
         async with sf() as s:
             rows = (await s.execute(text(
                 "SELECT e.wallet, e.side, e.time, e.event_id FROM ut_entries e JOIN ut_wallet_meta m ON m.wallet=e.wallet AND m.excluded IS NULL "
                 "WHERE e.coin=:c AND e.time >= :a"), {"c": coin, "a": since})).all()
         ents = [{"wallet": w, "coin": coin, "side": sd, "time": common.ms(t), "event_id": ev} for w, sd, t, ev in rows]
+        crowd_marked += rules.mark_crowds(ents)
         pairs = rules.co_entry_pairs(ents)
         if len(pairs) > PAIR_CAP_PER_COIN:
             pairs = [p for p in pairs if p[0] in flagged or p[1] in flagged]
             capped += 1
-        out = [{"a": p[0], "b": p[1], "c": p[2], "s": p[3], "ta": common.dt(p[4]), "tb": common.dt(p[5]), "ev": 1 if p[6] else 0} for p in pairs]
+        out = [{"a": p[0], "b": p[1], "c": p[2], "s": p[3], "ta": common.dt(p[4]), "tb": common.dt(p[5]), "ev": 1 if p[6] else 0, "cr": 1 if p[7] else 0} for p in pairs]
         async with sf() as s:
             for i in range(0, len(out), 1000):
                 await s.execute(text(
-                    "INSERT IGNORE INTO ut_coentries (wallet_a, wallet_b, coin, side, time_a, time_b, on_event) VALUES (:a, :b, :c, :s, :ta, :tb, :ev)"),
+                    "INSERT INTO ut_coentries (wallet_a, wallet_b, coin, side, time_a, time_b, on_event, crowd) VALUES (:a, :b, :c, :s, :ta, :tb, :ev, :cr) "
+                    "ON DUPLICATE KEY UPDATE crowd=VALUES(crowd), on_event=VALUES(on_event)"),
                     out[i:i + 1000])
             await s.commit()
         total += len(out)
-    return {"pairs": total, "coins": len(coins), "capped_coins": capped}
+        crowd_pairs += sum(1 for p in pairs if p[7])
+    return {"pairs": total, "crowd_pairs": crowd_pairs, "crowd_entries": crowd_marked, "coins": len(coins), "capped_coins": capped}
 
 
 async def entry_counts(wallets: list[str], since: datetime) -> dict[str, dict]:
@@ -85,7 +92,7 @@ async def build(as_of: date | None = None) -> dict:
             await s.commit()
             return {**co, "clusters": 0, "members": 0}
         pairs = (await s.execute(text(
-            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND wallet_a IN :f AND wallet_b IN :f"
+            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND crowd = 0 AND wallet_a IN :f AND wallet_b IN :f"
         ).bindparams(bindparam("f", expanding=True)), {"a": since, "f": flagged})).all()
         meta = {w: (f, fd, lev) for w, f, fd, lev in (await s.execute(text(
             "SELECT m.wallet, m.funder, m.first_deposit_at, (SELECT ROUND(AVG(leverage),0) FROM round_trips r WHERE r.wallet=m.wallet AND r.venue='hl' "

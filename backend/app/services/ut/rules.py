@@ -383,10 +383,39 @@ LEVEL_WORDS = {
 # clusters
 # ---------------------------------------------------------------------------
 
+CROWD_MIN = 4               # this many distinct wallets inside the window = a crowd, not a pair
+
+
+def mark_crowds(entries: list[dict], window_ms: int = 60_000, crowd_min: int = CROWD_MIN) -> int:
+    """Sets e['crowd'] = True on every entry that has at least crowd_min
+    distinct wallets (itself included) entering the same coin and side within
+    window_ms before or after it. Returns the number marked. A move that
+    pulls many wallets in at once says nothing about any two of them."""
+    by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for e in entries:
+        e["crowd"] = False
+        by_key[(e["coin"], e["side"])].append(e)
+    marked = 0
+    for rows in by_key.values():
+        rows.sort(key=lambda e: e["time"])
+        lo = 0
+        for i, e in enumerate(rows):
+            while rows[lo]["time"] < e["time"] - window_ms:
+                lo += 1
+            hi = i
+            while hi + 1 < len(rows) and rows[hi + 1]["time"] - e["time"] <= window_ms:
+                hi += 1
+            if len({r["wallet"] for r in rows[lo:hi + 1]}) >= crowd_min:
+                e["crowd"] = True
+                marked += 1
+    return marked
+
+
 def co_entry_pairs(entries: list[dict], window_ms: int = 60_000) -> list[tuple]:
-    """(wallet_a, wallet_b, coin, side, time_a, time_b, on_event) for every
-    pair of entries by different wallets, same coin and side, within
-    window_ms. entries carry wallet, coin, side, time, event_id."""
+    """(wallet_a, wallet_b, coin, side, time_a, time_b, on_event, crowd) for
+    every pair of entries by different wallets, same coin and side, within
+    window_ms. entries carry wallet, coin, side, time, event_id and, after
+    mark_crowds, crowd."""
     by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for e in entries:
         by_key[(e["coin"], e["side"])].append(e)
@@ -401,7 +430,7 @@ def co_entry_pairs(entries: list[dict], window_ms: int = 60_000) -> list[tuple]:
                     wa, wb = sorted((a["wallet"], b["wallet"]))
                     ta, tb = (a["time"], b["time"]) if wa == a["wallet"] else (b["time"], a["time"])
                     on_ev = bool(a.get("event_id") or b.get("event_id"))
-                    out.append((wa, wb, coin, side, ta, tb, on_ev))
+                    out.append((wa, wb, coin, side, ta, tb, on_ev, bool(a.get("crowd") or b.get("crowd"))))
                 j += 1
     return out
 
@@ -431,7 +460,10 @@ def coentry_edges(pairs: list[tuple], min_total: int = 3, min_on_event: int = 2,
     without it 148 flagged wallets fell into one component).
     {(a, b): {n, on_event, expected}}."""
     agg: dict[tuple[str, str], dict] = {}
-    for wa, wb, _coin, _side, _ta, _tb, on_ev in pairs:
+    for p in pairs:
+        wa, wb, on_ev = p[0], p[1], p[6]
+        if len(p) > 7 and p[7]:
+            continue              # a crowd co-entry counts for no pair
         d = agg.setdefault((wa, wb), {"n": 0, "on_event": 0, "expected": None})
         d["n"] += 1
         d["on_event"] += 1 if on_ev else 0

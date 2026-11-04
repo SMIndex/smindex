@@ -82,6 +82,7 @@ DDL = [
     "CREATE TABLE IF NOT EXISTS ut_coentries ("
     " id BIGINT AUTO_INCREMENT PRIMARY KEY, wallet_a CHAR(42) NOT NULL, wallet_b CHAR(42) NOT NULL, coin VARCHAR(32) NOT NULL,"
     " side ENUM('long','short') NOT NULL, time_a DATETIME(3) NOT NULL, time_b DATETIME(3) NOT NULL, on_event TINYINT(1) NOT NULL DEFAULT 0,"
+    " crowd TINYINT(1) NOT NULL DEFAULT 0,"
     " UNIQUE KEY ux_co (wallet_a, wallet_b, coin, side, time_a), KEY ix_pair (wallet_a, wallet_b))"
     " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
 

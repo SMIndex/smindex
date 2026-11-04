@@ -295,7 +295,7 @@ async def cluster_detail(cid: int, rows_by_wallet: dict[str, dict]) -> dict | No
             return None
         members = [w for w in (await s.execute(text("SELECT wallet FROM ut_cluster_members WHERE cluster_id=:i"), {"i": cid})).scalars().all()]
         pairs = (await s.execute(text(
-            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND wallet_a IN :m AND wallet_b IN :m ORDER BY time_a DESC"
+            "SELECT wallet_a, wallet_b, coin, side, time_a, time_b, on_event FROM ut_coentries WHERE time_a >= :a AND crowd = 0 AND wallet_a IN :m AND wallet_b IN :m ORDER BY time_a DESC"
         ).bindparams(bindparam("m", expanding=True)), {"a": since, "m": members or ["-"]})).all()
         funders = {w: f for w, f in (await s.execute(text(
             "SELECT wallet, funder FROM ut_wallet_meta WHERE wallet IN :m").bindparams(bindparam("m", expanding=True)), {"m": members or ["-"]})).all()}
