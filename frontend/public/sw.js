@@ -1,4 +1,4 @@
-const CACHE_NAME = 'smindex-v12';
+const CACHE_NAME = 'smindex-v13';
 
 // Install: skip waiting to activate immediately
 self.addEventListener('install', () => {
@@ -26,6 +26,11 @@ self.addEventListener('fetch', (event) => {
 
   // API and WS calls: network only (don't cache API responses)
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) {
+    return;
+  }
+
+  // Static research pages live beside the app and are not SPA routes: let the network serve them
+  if (url.pathname.startsWith('/bt/') || url.pathname.startsWith('/research/')) {
     return;
   }
 
