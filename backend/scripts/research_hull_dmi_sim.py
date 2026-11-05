@@ -84,12 +84,40 @@ def dmi(h, l, c, di_len=14, adx_len=14):
     return plus, minus, adx
 
 
+def supertrend(h, l, c, length=10, mult=3.0):
+    """TradingView ta.supertrend: Wilder ATR, carried bands, direction flips on the close.
+    Returns (line, dir) with dir 1 = up (line below price), -1 = down."""
+    n = len(c)
+    tr = [None] + [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, n)]
+    atr = rma(tr, length)
+    line = [None] * n; d = [0] * n
+    up = dn = None; trend = 1
+    for i in range(n):
+        if atr[i] is None:
+            continue
+        hl2 = (h[i] + l[i]) / 2
+        u = hl2 - mult * atr[i]; dd = hl2 + mult * atr[i]
+        if up is not None and c[i - 1] > up:
+            u = max(u, up)
+        if dn is not None and c[i - 1] < dn:
+            dd = min(dd, dn)
+        if up is not None and dn is not None:
+            if trend == -1 and c[i] > dn:
+                trend = 1
+            elif trend == 1 and c[i] < up:
+                trend = -1
+        up, dn = u, dd
+        d[i] = trend; line[i] = u if trend == 1 else dd
+    return line, d
+
+
 def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0, fee=0.00045, capital=6000.0,
-             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14):
+             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14, exit_mode="hull", st_len=10, st_mult=3.0):
     o = [b[1] for b in bars]; h = [b[2] for b in bars]; l = [b[3] for b in bars]; c = [b[4] for b in bars]; t = [b[0] for b in bars]
     n = len(c)
     hull = hma(c, length)
     plus, minus, adx = dmi(h, l, c, di_len, adx_len)
+    st_line, st_dir = supertrend(h, l, c, st_len, st_mult)
     green = [None] * n
     for i in range(2, n):
         if hull[i] is not None and hull[i - 2] is not None:
@@ -125,8 +153,15 @@ def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0
             elif stop_px is not None and ((pos > 0 and l[i] <= stop_px) or (pos < 0 and h[i] >= stop_px)):
                 px = min(stop_px, o[i]) if pos > 0 else max(stop_px, o[i])
                 close_pos(i, px, "stop")
-            elif (pos > 0 and flip_dn) or (pos < 0 and flip_up):
-                close_pos(i, c[i], "flip")
+            else:
+                hull_exit = (pos > 0 and flip_dn) or (pos < 0 and flip_up)
+                st_exit = st_dir[i] != 0 and st_dir[i - 1] != 0 and ((pos > 0 and st_dir[i] == -1 and st_dir[i - 1] == 1) or (pos < 0 and st_dir[i] == 1 and st_dir[i - 1] == -1))
+                if exit_mode == "hull" and hull_exit:
+                    close_pos(i, c[i], "flip")
+                elif exit_mode == "st" and st_exit:
+                    close_pos(i, c[i], "supertrend")
+                elif exit_mode == "either" and (hull_exit or st_exit):
+                    close_pos(i, c[i], "flip" if hull_exit else "supertrend")
         # 2. new signal
         if flip_up or flip_dn:
             side = 1 if flip_up else -1
@@ -168,7 +203,7 @@ def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0
     open_pnl = qty * (c[-1] - entry) * pos if pos else 0.0
     return {"trades": trades, "end": equity + open_pnl, "maxdd": maxdd, "fees": fees, "signals": signals, "confirmed": confirmed,
             "dropped_dmi": dropped_dmi, "dropped_price": dropped_price, "liqs": liqs, "open": pos, "open_pnl": open_pnl,
-            "hull": hull, "green": green, "plus": plus, "minus": minus, "adx": adx}
+            "hull": hull, "green": green, "plus": plus, "minus": minus, "adx": adx, "st_line": st_line, "st_dir": st_dir}
 
 
 def report(label, s, capital):
@@ -196,9 +231,12 @@ if __name__ == "__main__":
     ap.add_argument("--stop", type=float, default=0.0, help="stop loss as a fraction, 0 = none")
     ap.add_argument("--adx-min", type=float, default=0.0)
     ap.add_argument("--capital", type=float, default=6000)
+    ap.add_argument("--exit", default="hull", choices=["hull", "st", "either"], help="exit on the opposite Hull flip, the Supertrend flip, or whichever comes first")
+    ap.add_argument("--st-len", type=int, default=10)
+    ap.add_argument("--st-mult", type=float, default=3.0)
     a = ap.parse_args()
     j = json.load(open(a.bars))
-    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital)
+    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital, exit_mode=a.exit, st_len=a.st_len, st_mult=a.st_mult)
     report(f"{j['coin']} {j['tf']} ({len(j['bars'])} bars from {dt(j['bars'][0][0]).date()}): Hull {a.length}, DMI 14/14, {a.dir}, {a.lev:.0f}x, stop {a.stop * 100:.0f}%", s, a.capital)
     for x in s["trades"][:5]:
         print("  ", x["side"], dt(x["entry_t"]).strftime("%Y-%m-%d %H:%M"), "->", dt(x["exit_t"]).strftime("%Y-%m-%d %H:%M"), f"{x['entry']:.2f} -> {x['exit']:.2f}", f"${x['pnl']:+,.0f}", x["how"])
