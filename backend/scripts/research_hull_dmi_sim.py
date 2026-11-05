@@ -112,7 +112,7 @@ def supertrend(h, l, c, length=10, mult=3.0):
 
 
 def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0, fee=0.00045, capital=6000.0,
-             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14, exit_mode="hull", st_len=10, st_mult=3.0, tv_mode=False):
+             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14, exit_mode="hull", st_len=10, st_mult=3.0, tv_mode=False, use_dmi=True):
     o = [b[1] for b in bars]; h = [b[2] for b in bars]; l = [b[3] for b in bars]; c = [b[4] for b in bars]; t = [b[0] for b in bars]
     n = len(c)
     hull = hma(c, length)
@@ -189,8 +189,8 @@ def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0
                 side = pending["side"]
                 price_ok = c[i] > pending["px"] if side > 0 else c[i] < pending["px"]
                 if price_ok:
-                    dmi_ok = plus[i] is not None and minus[i] is not None and adx[i] is not None and \
-                        ((plus[i] > minus[i]) if side > 0 else (minus[i] > plus[i])) and adx[i] >= adx_min
+                    dmi_ok = (not use_dmi) or (plus[i] is not None and minus[i] is not None and adx[i] is not None and
+                                               ((plus[i] > minus[i]) if side > 0 else (minus[i] > plus[i])) and adx[i] >= adx_min)
                     if dmi_ok:
                         pos = side; entry = c[i]; entry_i = i
                         notional = equity * lev
@@ -247,9 +247,10 @@ if __name__ == "__main__":
     ap.add_argument("--st-len", type=int, default=10)
     ap.add_argument("--st-mult", type=float, default=3.0)
     ap.add_argument("--tv", action="store_true", help="TradingView mode: enter on the flip candle, no confirmation, no DMI")
+    ap.add_argument("--no-dmi", action="store_true", help="skip the DMI confirmation (Hull and candle confirmation only)")
     a = ap.parse_args()
     j = json.load(open(a.bars))
-    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital, exit_mode=a.exit, st_len=a.st_len, st_mult=a.st_mult, tv_mode=a.tv)
+    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital, exit_mode=a.exit, st_len=a.st_len, st_mult=a.st_mult, tv_mode=a.tv, use_dmi=not a.no_dmi)
     report(f"{j['coin']} {j['tf']} ({len(j['bars'])} bars from {dt(j['bars'][0][0]).date()}): Hull {a.length}, DMI 14/14, {a.dir}, {a.lev:.0f}x, stop {a.stop * 100:.0f}%", s, a.capital)
     for x in s["trades"][:5]:
         print("  ", x["side"], dt(x["entry_t"]).strftime("%Y-%m-%d %H:%M"), "->", dt(x["exit_t"]).strftime("%Y-%m-%d %H:%M"), f"{x['entry']:.2f} -> {x['exit']:.2f}", f"${x['pnl']:+,.0f}", x["how"])
