@@ -112,7 +112,7 @@ def supertrend(h, l, c, length=10, mult=3.0):
 
 
 def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0, fee=0.00045, capital=6000.0,
-             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14, exit_mode="hull", st_len=10, st_mult=3.0):
+             confirm=(2, 3), maint=0.05, di_len=14, adx_len=14, exit_mode="hull", st_len=10, st_mult=3.0, tv_mode=False):
     o = [b[1] for b in bars]; h = [b[2] for b in bars]; l = [b[3] for b in bars]; c = [b[4] for b in bars]; t = [b[0] for b in bars]
     n = len(c)
     hull = hma(c, length)
@@ -166,12 +166,24 @@ def simulate(bars, *, length=31, lev=1.0, direction="all", stop=0.0, adx_min=0.0
         if flip_up or flip_dn:
             side = 1 if flip_up else -1
             if direction == "all" or (direction == "long" and side > 0) or (direction == "short" and side < 0):
-                pending = {"side": side, "i": i, "px": c[i]}
                 signals += 1
+                if tv_mode:
+                    # the TradingView strategy: enter on the flip candle itself, no confirmation, no DMI
+                    if not pos:
+                        pos = side; entry = c[i]; entry_i = i
+                        notional = equity * lev
+                        qty = notional / entry
+                        fees += notional * fee
+                        equity -= notional * fee
+                        stop_px = (entry * (1 - stop) if side > 0 else entry * (1 + stop)) if stop > 0 else None
+                        confirmed += 1
+                    pending = None
+                else:
+                    pending = {"side": side, "i": i, "px": c[i]}
             else:
                 pending = None
         # 3. confirmation window
-        if pending and not pos:
+        if pending and not pos and not tv_mode:
             k = i - pending["i"]
             if k in confirm:
                 side = pending["side"]
@@ -234,9 +246,10 @@ if __name__ == "__main__":
     ap.add_argument("--exit", default="hull", choices=["hull", "st", "either"], help="exit on the opposite Hull flip, the Supertrend flip, or whichever comes first")
     ap.add_argument("--st-len", type=int, default=10)
     ap.add_argument("--st-mult", type=float, default=3.0)
+    ap.add_argument("--tv", action="store_true", help="TradingView mode: enter on the flip candle, no confirmation, no DMI")
     a = ap.parse_args()
     j = json.load(open(a.bars))
-    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital, exit_mode=a.exit, st_len=a.st_len, st_mult=a.st_mult)
+    s = simulate(j["bars"], length=a.length, lev=a.lev, direction=a.dir, stop=a.stop, adx_min=a.adx_min, capital=a.capital, exit_mode=a.exit, st_len=a.st_len, st_mult=a.st_mult, tv_mode=a.tv)
     report(f"{j['coin']} {j['tf']} ({len(j['bars'])} bars from {dt(j['bars'][0][0]).date()}): Hull {a.length}, DMI 14/14, {a.dir}, {a.lev:.0f}x, stop {a.stop * 100:.0f}%", s, a.capital)
     for x in s["trades"][:5]:
         print("  ", x["side"], dt(x["entry_t"]).strftime("%Y-%m-%d %H:%M"), "->", dt(x["exit_t"]).strftime("%Y-%m-%d %H:%M"), f"{x['entry']:.2f} -> {x['exit']:.2f}", f"${x['pnl']:+,.0f}", x["how"])
