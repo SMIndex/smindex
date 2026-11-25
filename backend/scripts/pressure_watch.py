@@ -9,7 +9,9 @@ Read-only against the venue (info reads only, paced under the shared weight
 window, background level). Writes only its own pw_* tables and one static page.
 
     python scripts/pressure_watch.py collect     # every 5 min: OI, funding, premium
-    python scripts/pressure_watch.py cycle       # every 20 min: RWA sweep, signals, page, alerts
+    python scripts/pressure_watch.py sweep       # every 10 min: rotating position checks (leaderboard + active traders)
+    python scripts/pressure_watch.py universe    # daily: account values from the public leaderboard
+    python scripts/pressure_watch.py cycle       # every 20 min: signals, page, alerts
     python scripts/pressure_watch.py backtest    # tests every signal on stored history
     python scripts/pressure_watch.py funding     # one-off funding history backfill
 """
@@ -51,7 +53,6 @@ DEXES = {"": CRYPTO, "xyz": ["xyz:NVDA", "xyz:BRENTOIL", "xyz:AMD"], "io": ["io:
 BIG_ALERT = {"BTC": 2_000_000, "ETH": 1_000_000, "SOL": 500_000, "HYPE": 500_000, "ZEC": 300_000,
              "MON": 150_000, "xyz:NVDA": 300_000, "xyz:BRENTOIL": 300_000, "xyz:AMD": 150_000,
              "io:ANTH": 100_000}
-RWA_WALLETS = {"xyz": 160, "io": 50}
 NOW = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
 
@@ -129,6 +130,18 @@ SCHEMA = [
         id bigint NOT NULL AUTO_INCREMENT, t datetime NOT NULL, coin varchar(32) NOT NULL,
         kind varchar(24) NOT NULL, akey varchar(128) NOT NULL, body text,
         PRIMARY KEY (id), KEY ix_k (akey, t)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS pw_wallets (
+        wallet char(42) NOT NULL, account_value double, lb_at datetime,
+        PRIMARY KEY (wallet), KEY ix_av (lb_at, account_value)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS pw_check (
+        dex varchar(8) NOT NULL, wallet char(42) NOT NULL, last_at datetime NOT NULL, ok tinyint NOT NULL,
+        PRIMARY KEY (dex, wallet)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS pw_state (
+        dex varchar(8) NOT NULL, wallet char(42) NOT NULL, coin varchar(32) NOT NULL,
+        side varchar(5) NOT NULL, size double NOT NULL, notional double NOT NULL,
+        entry_px double, leverage double, liq_px double, margin_used double, upnl double,
+        margin_mode varchar(8), account_value double, checked_at datetime NOT NULL,
+        PRIMARY KEY (dex, wallet, coin), KEY ix_c (coin)) ENGINE=InnoDB""",
     """CREATE TABLE IF NOT EXISTS pw_readings (
         t datetime NOT NULL, coin varchar(32) NOT NULL, verdict varchar(40) NOT NULL,
         score double, body json, PRIMARY KEY (coin, t)) ENGINE=InnoDB""",
@@ -143,13 +156,22 @@ def ensure_schema():
 _own = deque()
 
 
+_health = {"at": 0.0, "v": None}
+
+
 def health_used():
+    """The API's own window use, re-read at most every 5 s (the endpoint can
+    take seconds to answer when the app is busy)."""
+    if time.time() - _health["at"] < 5 and _health["v"] is not None:
+        return _health["v"]
     try:
         d = json.loads(urllib.request.urlopen(HEALTH, timeout=10).read())
         h = d.get("hl_weight", d)
-        return float(h.get("window_weight_used", 0))
+        _health["v"] = float(h.get("window_weight_used", 0))
     except Exception:  # noqa: BLE001
-        return None
+        _health["v"] = None
+    _health["at"] = time.time()
+    return _health["v"]
 
 
 def hl(body, w):
@@ -172,7 +194,7 @@ def hl(body, w):
         try:
             resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
             _own.append((time.time(), w))
-            time.sleep(0.4)
+            time.sleep(0.2)
             return resp
         except urllib.error.HTTPError as e:
             if e.code == 429:
@@ -237,77 +259,174 @@ def funding_backfill():
 
 
 # ------------------------------------------------------------------ RWA sweep
-def rwa_wallets(dex, limit):
-    coins = DEXES[dex]
-    ph = ",".join(["%s"] * len(coins))
-    since = int((NOW - timedelta(days=14)).timestamp() * 1000)
-    top = q(f"SELECT wallet_address, SUM(px*sz) v FROM hl_fill_events WHERE coin IN ({ph}) AND ts_ms>=%s "
-            f"GROUP BY wallet_address ORDER BY v DESC LIMIT %s", (*coins, since, limit))
-    ws = [r[0].lower() for r in top]
-    held = q(f"SELECT DISTINCT wallet FROM pw_positions WHERE coin IN ({ph}) AND cycle_ts=(SELECT MAX(cycle_ts) FROM pw_sweep WHERE dex=%s)",
-             (*coins, dex))
-    for (w,) in held:
-        if w not in ws:
-            ws.append(w)
-    return ws[: limit + 40]
+# ------------------------------------------------------------------ wallet universe and wide sweep
+LB_URL = "https://stats-data.hyperliquid.xyz/Mainnet/leaderboard"
+# (dex, source, rule, interval minutes). Most overdue first, inside a weight budget per run.
+SWEEP_PLAN = [
+    ("", "fills", 200, 20),          # top 200 by recent volume on the 6 crypto coins
+    ("", "lb", 1_000_000, 60),       # every account worth $1M+
+    ("", "lb", 250_000, 480),        # $250K to $1M
+    ("xyz", "fills", 160, 20),       # top 160 by recent volume on NVDA, BRENT, AMD
+    ("xyz", "lb", 2_000_000, 360),   # every account worth $2M+
+    ("io", "fills", 50, 20),         # top 50 on Anthropic
+]
+SWEEP_BUDGET = int(os.environ.get("PW_SWEEP_BUDGET", "1300"))   # weight per 10 min run = 130 a minute
+SWEEP_SECONDS = 540
+SWEEP_WINDOW_LIMIT = 500
 
 
-def rwa_sweep():
-    cyc = NOW.replace(second=0)
-    pos_rows, sweep_rows, events = [], [], []
-    for dex, limit in RWA_WALLETS.items():
-        coins = DEXES[dex]
-        ph = ",".join(["%s"] * len(coins))
-        prev_cyc = q("SELECT MAX(cycle_ts) FROM pw_sweep WHERE dex=%s", (dex,))[0][0]
-        prev_ok = set()
-        prev_pos = defaultdict(dict)
-        if prev_cyc:
-            prev_ok = {r[0] for r in q("SELECT wallet FROM pw_sweep WHERE dex=%s AND cycle_ts=%s AND ok=1", (dex, prev_cyc))}
-            for w, coin, side, size, notional, entry, marg in q(
-                    f"SELECT wallet,coin,side,size,notional,entry_px,margin_used FROM pw_positions WHERE cycle_ts=%s AND coin IN ({ph})",
-                    (prev_cyc, *coins)):
-                prev_pos[w][coin] = {"side": side, "size": size, "notional": notional, "entry": entry, "margin": marg}
-        marks = {}
-        for w in rwa_wallets(dex, limit):
-            try:
-                st = hl({"type": "clearinghouseState", "user": w, "dex": dex}, 2)
-            except Exception:  # noqa: BLE001
-                sweep_rows.append((cyc, dex, w, None, 0))
-                continue
-            av = f((st.get("marginSummary") or {}).get("accountValue"))
-            sweep_rows.append((cyc, dex, w, av, 1))
-            cur = {}
-            for ap in st.get("assetPositions") or []:
-                p = ap.get("position") or {}
-                coin = p.get("coin", "")
-                if ":" not in coin:
-                    coin = f"{dex}:{coin}"
-                if coin not in coins:
-                    continue
-                szi = f(p.get("szi"), 0.0)
-                if not szi:
-                    continue
-                notional = abs(f(p.get("positionValue"), 0.0))
-                side = "long" if szi > 0 else "short"
-                lev = (p.get("leverage") or {})
-                cur[coin] = {"side": side, "size": abs(szi), "notional": notional, "entry": f(p.get("entryPx")),
-                             "margin": f(p.get("marginUsed"))}
-                if abs(szi):
-                    marks[coin] = notional / abs(szi)
-                pos_rows.append((cyc, coin, w, side, abs(szi), notional, f(p.get("entryPx")), f(lev.get("value")),
-                                 f(p.get("liquidationPx")), f(p.get("marginUsed")), f(p.get("unrealizedPnl")), lev.get("type")))
-            if w in prev_ok:   # per-wallet baseline: first sighting emits nothing
-                events += diff_positions(cyc, w, prev_pos.get(w, {}), cur, marks)
-    qmany("INSERT IGNORE INTO pw_sweep (cycle_ts,dex,wallet,account_value,ok) VALUES (%s,%s,%s,%s,%s)", sweep_rows)
-    qmany("INSERT IGNORE INTO pw_positions (cycle_ts,coin,wallet,side,size,notional,entry_px,leverage,liq_px,margin_used,upnl,margin_mode) "
-          "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", pos_rows)
-    qmany("INSERT INTO pw_events (detected_at,wallet,coin,event_type,side,size_before,size_after,notional_delta,ref_px,margin_before,margin_after) "
-          "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", events)
-    old = NOW - timedelta(days=150)
-    q("DELETE FROM pw_positions WHERE cycle_ts < %s", (old,))
-    q("DELETE FROM pw_sweep WHERE cycle_ts < %s", (old,))
-    print("rwa sweep", len(sweep_rows), "wallets", len(pos_rows), "positions", len(events), "events")
-    return events
+def universe():
+    """Account values of every Hyperliquid account on the public leaderboard
+    (stats-data host: no info-API weight), streamed, never loaded whole."""
+    import tempfile
+    import ijson
+    ensure_schema()
+    req = urllib.request.Request(LB_URL, headers={"user-agent": "smindex-pressure"})
+    with tempfile.TemporaryFile() as tmp:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            while True:
+                b = r.read(1 << 20)
+                if not b:
+                    break
+                tmp.write(b)
+        tmp.seek(0)
+        rows = []
+        for item in ijson.items(tmp, "leaderboardRows.item"):
+            av = f(item.get("accountValue"), 0.0)
+            if av >= 100_000:
+                rows.append((item["ethAddress"].lower(), av, NOW))
+    qmany("INSERT INTO pw_wallets (wallet, account_value, lb_at) VALUES (%s,%s,%s) "
+          "ON DUPLICATE KEY UPDATE account_value=VALUES(account_value), lb_at=VALUES(lb_at)", rows)
+    print("universe", len(rows), "accounts worth $100K+")
+
+
+def plan_wallets():
+    """{(dex, wallet): interval_min} from SWEEP_PLAN, the shortest interval winning."""
+    want = {}
+    lb_cut = NOW - timedelta(days=3)
+    for dex, src, rule, every in SWEEP_PLAN:
+        if src == "fills":
+            coins = CRYPTO if dex == "" else DEXES[dex]
+            ph = ",".join(["%s"] * len(coins))
+            since = int((NOW - timedelta(days=3 if dex == "" else 14)).timestamp() * 1000)
+            ws = [r[0].lower() for r in q(
+                f"SELECT wallet_address, SUM(px*sz) v FROM hl_fill_events WHERE coin IN ({ph}) AND ts_ms>=%s "
+                f"GROUP BY wallet_address ORDER BY v DESC LIMIT %s", (*coins, since, rule))]
+        else:
+            hi = {250_000: 1_000_000}.get(rule)
+            sql = "SELECT wallet FROM pw_wallets WHERE lb_at>=%s AND account_value>=%s"
+            args = [lb_cut, rule]
+            if hi:
+                sql += " AND account_value<%s"
+                args.append(hi)
+            ws = [r[0] for r in q(sql, args)]
+        for w in ws:
+            k = (dex, w)
+            want[k] = min(want.get(k, every), every)
+    # anything we hold a position for keeps being checked at least every 2 h
+    for dex, w in q("SELECT DISTINCT dex, wallet FROM pw_state"):
+        k = (dex, w)
+        want[k] = min(want.get(k, 120), 120)
+    # main-dex wallets the analytics sweep already reads every 20 min are skipped there
+    c = q("SELECT MAX(cycle_ts) FROM analytics_wallet_state")[0][0]
+    if c:
+        for (w,) in q("SELECT wallet FROM analytics_wallet_state WHERE cycle_ts=%s", (c,)):
+            want.pop(("", w.lower()), None)
+    return want
+
+
+def wide_sweep():
+    global WINDOW_LIMIT
+    WINDOW_LIMIT = SWEEP_WINDOW_LIMIT
+    ensure_schema()
+    t0 = time.time()
+    want = plan_wallets()
+    last = {(d, w): (t, ok) for d, w, t, ok in q("SELECT dex, wallet, last_at, ok FROM pw_check")}
+    due = []
+    for k, every in want.items():
+        lt = last.get(k)
+        if lt is None:
+            due.append((NOW, k))   # first check: after every overdue tracked wallet
+        elif NOW - lt[0] >= timedelta(minutes=every - 2):
+            due.append((lt[0] + timedelta(minutes=every), k))
+    due.sort()
+    spent, n_ok, n_ev = 0, 0, 0
+    for _, (dex, w) in due:
+        if spent + 2 > SWEEP_BUDGET or time.time() - t0 > SWEEP_SECONDS:
+            break
+        body = {"type": "clearinghouseState", "user": w}
+        if dex:
+            body["dex"] = dex
+        now = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+        spent += 2
+        try:
+            st = hl(body, 2)
+        except Exception:  # noqa: BLE001
+            q("INSERT INTO pw_check (dex,wallet,last_at,ok) VALUES (%s,%s,%s,0) "
+              "ON DUPLICATE KEY UPDATE last_at=VALUES(last_at), ok=0", (dex, w, now))
+            continue
+        n_ok += 1
+        n_ev += apply_state(dex, w, st, now, baseline=(dex, w) not in last or not last[(dex, w)][1])
+    print(f"sweep due {len(due)} of {len(want)} planned, checked {n_ok}, weight {spent}, events {n_ev}, {time.time() - t0:.0f}s")
+    q("DELETE FROM pw_events WHERE detected_at < %s", (NOW - timedelta(days=150),))
+
+
+def apply_state(dex, w, st, now, baseline):
+    coins = CRYPTO if dex == "" else DEXES[dex]
+    av = f((st.get("marginSummary") or {}).get("accountValue"))
+    cur, rows, marks = {}, [], {}
+    for ap in st.get("assetPositions") or []:
+        p = ap.get("position") or {}
+        coin = p.get("coin", "")
+        if dex and ":" not in coin:
+            coin = f"{dex}:{coin}"
+        if coin not in coins:
+            continue
+        szi = f(p.get("szi"), 0.0)
+        if not szi:
+            continue
+        notional = abs(f(p.get("positionValue"), 0.0))
+        side = "long" if szi > 0 else "short"
+        lev = p.get("leverage") or {}
+        cur[coin] = {"side": side, "size": abs(szi), "notional": notional, "entry": f(p.get("entryPx")),
+                     "margin": f(p.get("marginUsed"))}
+        marks[coin] = notional / abs(szi)
+        rows.append((dex, w, coin, side, abs(szi), notional, f(p.get("entryPx")), f(lev.get("value")),
+                     f(p.get("liquidationPx")), f(p.get("marginUsed")), f(p.get("unrealizedPnl")), lev.get("type"), av, now))
+    prev = {}
+    for coin, side, size, notional, entry, marg in q(
+            "SELECT coin, side, size, notional, entry_px, margin_used FROM pw_state WHERE dex=%s AND wallet=%s", (dex, w)):
+        prev[coin] = {"side": side, "size": size, "notional": notional, "entry": entry, "margin": marg}
+    events = [] if baseline else diff_positions(now, w, prev, cur, marks)
+    gone = [c for c in prev if c not in cur]
+    if gone:
+        ph = ",".join(["%s"] * len(gone))
+        q(f"DELETE FROM pw_state WHERE dex=%s AND wallet=%s AND coin IN ({ph})", (dex, w, *gone))
+    qmany("INSERT INTO pw_state (dex,wallet,coin,side,size,notional,entry_px,leverage,liq_px,margin_used,upnl,margin_mode,"
+          "account_value,checked_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE side=VALUES(side), "
+          "size=VALUES(size), notional=VALUES(notional), entry_px=VALUES(entry_px), leverage=VALUES(leverage), "
+          "liq_px=VALUES(liq_px), margin_used=VALUES(margin_used), upnl=VALUES(upnl), margin_mode=VALUES(margin_mode), "
+          "account_value=VALUES(account_value), checked_at=VALUES(checked_at)", rows)
+    qmany("INSERT INTO pw_events (detected_at,wallet,coin,event_type,side,size_before,size_after,notional_delta,ref_px,"
+          "margin_before,margin_after) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", events)
+    q("INSERT INTO pw_check (dex,wallet,last_at,ok) VALUES (%s,%s,%s,1) "
+      "ON DUPLICATE KEY UPDATE last_at=VALUES(last_at), ok=1", (dex, w, now))
+    return len(events)
+
+
+def seed_state_from_snapshots():
+    """One-off: carry the first RWA sweeps (pw_positions / pw_sweep) into
+    pw_state / pw_check so those wallets keep their baseline."""
+    for dex in ("xyz", "io"):
+        c = q("SELECT MAX(cycle_ts) FROM pw_sweep WHERE dex=%s", (dex,))[0][0]
+        if not c:
+            continue
+        q("INSERT IGNORE INTO pw_check (dex,wallet,last_at,ok) SELECT dex, wallet, cycle_ts, ok FROM pw_sweep "
+          "WHERE dex=%s AND cycle_ts=%s", (dex, c))
+        q("INSERT IGNORE INTO pw_state (dex,wallet,coin,side,size,notional,entry_px,leverage,liq_px,margin_used,upnl,"
+          "margin_mode,checked_at) SELECT %s, wallet, coin, side, size, notional, entry_px, leverage, liq_px, margin_used, "
+          "upnl, margin_mode, cycle_ts FROM pw_positions WHERE cycle_ts=%s AND coin LIKE %s", (dex, c, dex + ":%"))
+    print("seeded", q("SELECT COUNT(*) FROM pw_state")[0][0], "positions")
 
 
 def diff_positions(t, w, prev, cur, marks):
@@ -644,18 +763,37 @@ def wallet_tags():
 
 
 def current_positions(coin):
+    """Latest known position per wallet: the analytics sweep (400 wallets, 20 min)
+    for crypto, plus every wallet the wide sweep holds; the fresher read wins."""
+    pos, newest = {}, None
     if coin in CRYPTO:
         c = q("SELECT MAX(cycle_ts) FROM analytics_positions WHERE asset=%s AND cycle_ts>=%s", (coin, NOW - timedelta(hours=2)))[0][0]
-        if not c:
-            return None, {}
-        rows = q("SELECT wallet, side, size, notional, entry_px, leverage, liq_px, upnl FROM analytics_positions WHERE asset=%s AND cycle_ts=%s", (coin, c))
-    else:
-        c = q("SELECT MAX(cycle_ts) FROM pw_positions WHERE coin=%s", (coin,))[0][0]
-        if not c:
-            return None, {}
-        rows = q("SELECT wallet, side, size, notional, entry_px, leverage, liq_px, upnl FROM pw_positions WHERE coin=%s AND cycle_ts=%s", (coin, c))
-    return c, {r[0].lower(): {"side": r[1], "size": f(r[2]), "notional": f(r[3]), "entry": f(r[4]), "lev": f(r[5]),
-                              "liq": f(r[6]), "upnl": f(r[7])} for r in rows}
+        if c:
+            newest = c
+            for r in q("SELECT wallet, side, size, notional, entry_px, leverage, liq_px, upnl FROM analytics_positions "
+                       "WHERE asset=%s AND cycle_ts=%s", (coin, c)):
+                pos[r[0].lower()] = {"side": r[1], "size": f(r[2]), "notional": f(r[3]), "entry": f(r[4]), "lev": f(r[5]),
+                                     "liq": f(r[6]), "upnl": f(r[7]), "at": c}
+    for r in q("SELECT wallet, side, size, notional, entry_px, leverage, liq_px, upnl, checked_at FROM pw_state "
+               "WHERE coin=%s AND checked_at>=%s", (coin, NOW - timedelta(hours=12))):
+        w = r[0].lower()
+        if w in pos and pos[w]["at"] >= r[8]:
+            continue
+        pos[w] = {"side": r[1], "size": f(r[2]), "notional": f(r[3]), "entry": f(r[4]), "lev": f(r[5]),
+                  "liq": f(r[6]), "upnl": f(r[7]), "at": r[8]}
+        newest = max(newest, r[8]) if newest else r[8]
+    return newest, pos
+
+
+def wide_events(coin, since):
+    """Crypto events found by the wide sweep (wallets outside the analytics sweep)."""
+    out = []
+    for ts, w, et, side, sb, sa, nd, px in q(
+            "SELECT detected_at, wallet, event_type, side, size_before, size_after, notional_delta, ref_px "
+            "FROM pw_events WHERE coin=%s AND detected_at>=%s", (coin, since)):
+        su = signed_usd(et, side, f(nd), f(sb), f(sa), f(px))
+        out.append((ts, w, et, side, su, abs(su), f(sb), f(sa), f(px)))
+    return out
 
 
 def first_open_times(ev):
@@ -684,6 +822,8 @@ def readings(bt):
     for coin in COINS:
         since = (NOW - timedelta(days=32)).replace(minute=0, second=0)
         ev = load_events_cached(coin, since)
+        if coin in CRYPTO:
+            ev = sorted(ev + wide_events(coin, since), key=lambda e: e[0])
         cand = load_candles(coin, since)
         ctx = q("SELECT t, mark, oi_coins, funding, premium, vol24 FROM pw_ctx WHERE coin=%s AND t>=%s ORDER BY t", (coin, NOW - timedelta(days=4)))
         # live price from the newest ctx row when fresher than the last candle
@@ -746,6 +886,7 @@ def readings(bt):
                 if -0.2 <= d <= 0.2:
                     b = round(d * 50) / 50
                     bands[b][0 if p["side"] == "long" else 1] += p["notional"]
+        oi_usd = (float(ctx[-1][2]) * float(ctx[-1][1])) if ctx and ctx[-1][2] and ctx[-1][1] else None
         longs = sum(p["notional"] for p in pos.values() if p["side"] == "long")
         shorts = sum(p["notional"] for p in pos.values() if p["side"] == "short")
         # off-hours build for US stocks: flow while NYSE is shut
@@ -761,7 +902,7 @@ def readings(bt):
             "top": [(w, v, per_w_n[w], pos.get(w), opened.get(w), tags.get(w, [])) for w, v in top],
             "flips": [(e[0], e[1].lower(), e[3], e[4], e[6], e[7], e[8], tags.get(e[1].lower(), [])) for e in flips[-10:]][::-1],
             "bigs": [(e[0], e[1].lower(), e[2], e[3], e[4], e[8], tags.get(e[1].lower(), [])) for e in bigs[-10:]][::-1],
-            "margins": margins, "bands": dict(bands), "longs": longs, "shorts": shorts, "n_pos": len(pos), "pos_cycle": cyc,
+            "margins": margins, "bands": dict(bands), "longs": longs, "shorts": shorts, "n_pos": len(pos), "pos_cycle": cyc, "oi_usd": oi_usd,
             "off_hours_flow": off, "ctx": last_ctx, "window_from": since.strftime("%d %b"),
             "price_72h": [(t, v) for t, v in pairs if t >= NOW - timedelta(hours=72)],
             "oi_72h": [(t, v) for t, v in oi_series if t >= NOW - timedelta(hours=72)],
@@ -913,6 +1054,9 @@ def plain(v):
 
 
 def render(rd, bt):
+    coverage = {"wallets": q("SELECT COUNT(*) FROM (SELECT wallet FROM pw_check WHERE last_at>=%s AND ok=1 UNION "
+                             "SELECT LOWER(wallet) FROM analytics_wallet_state WHERE cycle_ts=(SELECT MAX(cycle_ts) FROM analytics_wallet_state)) x",
+                             (NOW - timedelta(hours=12),))[0][0]}
     passed = [k for k, v in (bt or {}).get("rules", {}).items() if v.get("pass")]
     css = """
 :root{--bg:#0d1117;--card:#151b23;--ink:#e6edf3;--dim:#8b949e;--line:#30363d;--up:#3fb950;--down:#f85149;--acc:#58a6ff;--warn:#d29922}
@@ -940,11 +1084,13 @@ nav a{margin-right:10px;white-space:nowrap}
          '<div class="card"><b>How to read it.</b> Each market gets a verdict. For the 6 crypto coins the verdict counts only signals that '
          'passed a test on 3 months of our own history (section "Do the signals work?"). The 4 stock and oil markets have no position history '
          'yet (collection started 25 Nov 2026), so their verdict is marked untested and is a reading, not a forecast. '
-         '"Big wallets" are the wallets our sweeps follow: about 400 of the largest accounts for crypto, up to 200 per stock dex. Not advice.</div>',
+         f'"Big wallets" are the wallets we follow: <b>{coverage["wallets"]:,}</b> accounts checked in the last 12 hours '
+         f'(every Hyperliquid account worth $1M+ every hour, $250K+ every 8 hours, the most active traders of each market every 20 minutes). '
+         'The "Covered" column shows how much of each market they hold. Not advice.</div>',
          '<nav>' + "".join(f'<a href="#{anchor(x["coin"])}">{esc(x["label"])}</a>' for x in rd) + '<a href="#test">Do the signals work?</a></nav>',
          '<h2>All markets now</h2><div class="scroll"><table><tr><th>Market</th><th class="n">Price</th><th class="n">24 h</th>'
          '<th class="n">Open positions 24 h</th><th class="n">Funding (yearly)</th><th class="n">Big wallets net 24 h</th>'
-         '<th class="n">Flips 12 h</th><th>Verdict</th><th>Why</th></tr>']
+         '<th class="n">Flips 12 h</th><th class="n">Covered</th><th>Verdict</th><th>Why</th></tr>']
     for x in rd:
         r = x["r"] or {}
         fr = r.get("fund24")
@@ -955,10 +1101,11 @@ nav a{margin-right:10px;white-space:nowrap}
                  f'<td class="n">{pct(r.get("oi24"))}</td><td class="n">{pct(fr * 24 * 365 if fr is not None else None, 0)}</td>'
                  f'<td class="n {"up" if (r.get("flow24") or 0) > 0 else "down"}">{usd_s(r.get("flow24"), True)}</td>'
                  f'<td class="n">{usd_s(r.get("flips12"), True)}</td>'
+                 f'<td class="n">{(str(round((x["longs"] + x["shorts"]) / 2 / x["oi_usd"] * 100)) + "%") if x["oi_usd"] else "-"}</td>'
                  f'<td><span class="pill {verdict_cls(x["verdict"])}">{esc(x["verdict"])}</span></td><td>{why}</td></tr>')
     h.append('</table></div><p class="dim">Open positions 24 h = change in total open contracts on Hyperliquid, in coins. Big wallets net = what the followed '
              'wallets bought (+) or sold (-) in 24 h, counting opens, adds, cuts, closes and flips. Flips = net value of wallets that switched side '
-             '(+ = shorts turned long).</p>')
+             '(+ = shorts turned long). Covered = share of all open positions on Hyperliquid held by the followed wallets.</p>')
 
     for x in rd:
         r = x["r"] or {}
@@ -975,7 +1122,9 @@ nav a{margin-right:10px;white-space:nowrap}
             lines.append(f'Position history for this market started 25 Nov 2026 ({x["hist_days"]} days so far). Readings need about 3 days before the ranks mean anything; signals stay untested until there are weeks of data.')
         if x["off_hours_flow"] is not None:
             lines.append(f'Built while the US stock market was closed (last 24 h): <b class="{"up" if x["off_hours_flow"] > 0 else "down"}">{usd_s(x["off_hours_flow"], True)}</b>.')
-        lines.append(f'Followed wallets holding this market now: {x["n_pos"]}, longs {usd_s(x["longs"])} vs shorts {usd_s(x["shorts"])}'
+        cov = ((x["longs"] + x["shorts"]) / 2 / x["oi_usd"]) if x["oi_usd"] else None
+        lines.append(f'Followed wallets holding this market now: {x["n_pos"]:,}, longs {usd_s(x["longs"])} vs shorts {usd_s(x["shorts"])}'
+                     + (f', about {cov * 100:.0f}% of all open positions on Hyperliquid' if cov else '')
                      + (f' (snapshot {x["pos_cycle"]:%d %b %H:%M} UTC).' if x["pos_cycle"] else '.'))
         if fr is not None:
             lines.append(f'Funding, 24 h average: {fr * 100:.4f}% per hour ({pct(fr * 24 * 365, 0)} a year); '
@@ -1061,8 +1210,9 @@ nav a{margin-right:10px;white-space:nowrap}
             f'<li><b>{esc(v["name"])}</b>: {plain(v)}</li>' for v in bt["rules"].values()) + '</ul>'
             '<span class="dim">Many followed wallets are market makers and hedgers, whose flow is not a bet. That is one reason "follow the big wallets" can fail.</span></div>')
     h.append('<h2>What this page cannot see</h2><ul>'
-             '<li>Only followed wallets: about 400 large crypto accounts (sampled every 20 minutes) and up to 200 per stock dex. Smaller wallets and anything off Hyperliquid are not counted.</li>'
-             '<li>Snapshots are 20 minutes apart, so a position opened and closed between two snapshots is missed.</li>'
+             '<li>Only followed wallets: accounts worth $250K+ on the Hyperliquid leaderboard plus the most active traders of each market. Smaller wallets, and positions held off Hyperliquid, are not counted.</li>'
+             '<li>Accounts outside the 20-minute group are checked every 1 to 8 hours, so their changes show up later and as one step.</li>'
+             '<li>A position opened and closed between two checks of the same wallet is missed.</li>'
              '<li>Total open positions history: hourly from 4 Nov 2026 for crypto, every 5 minutes from 25 Nov 2026 for all 10 markets.</li>'
              '<li>Signals that passed on past data can stop working. Treat a verdict as a reason to look, not a reason to trade.</li></ul>')
     h.append('<p class="dim">SMIndex research. Read-only data from Hyperliquid. Not financial advice.</p></main></body></html>')
@@ -1075,7 +1225,6 @@ nav a{margin-right:10px;white-space:nowrap}
 
 def cycle():
     ensure_schema()
-    rwa_sweep()
     bt = json.loads(BT_FILE.read_text()) if BT_FILE.exists() else None
     rd = readings(bt)
     render(rd, bt)
@@ -1087,6 +1236,7 @@ def cycle():
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     {"collect": collect, "cycle": cycle, "backtest": backtest, "funding": funding_backfill,
+     "universe": universe, "sweep": wide_sweep, "seed": seed_state_from_snapshots,
      "render": lambda: render(readings(json.loads(BT_FILE.read_text()) if BT_FILE.exists() else None),
                               json.loads(BT_FILE.read_text()) if BT_FILE.exists() else None)}.get(
         cmd, lambda: sys.exit(__doc__))()
