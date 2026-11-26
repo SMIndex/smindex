@@ -49,6 +49,14 @@ with the same code as the daily job, new rows into round_trips (the app
 pushes them to the featured.trades channel). Counterparties of featured and
 candidate accounts are counted per day into featured_counterparties for the
 wash check. Every read here goes through the same paced info() as before.
+
+Tape (2026-11-26, Pressure Watch): every trade on TAPE_COINS is summed per
+hour, market and wallet (bought and sold in USD and size, and how much of it
+was taken from the book) and written to pw_tape when the hour is over.
+Wallets under TAPE_MIN_USD in an hour go into one '_small' row per market.
+pw_tape_hours keeps the minutes the feed was connected in each hour, so a
+restart or a dropped connection shows as a short hour. No extra
+subscriptions and no REST reads: TAPE_COINS are always kept subscribed.
 """
 import asyncio
 import json
@@ -95,6 +103,9 @@ PROBE_HOLD_SEC = 3.0
 FEATURED_RELOAD_SEC = 60
 FEATURED_FILLS_DAYS = 7            # first fills read for a featured account with no cursor
 CP_MAX_PAIRS = 50_000              # counterparty pairs held between flushes
+TAPE_COINS = {"BTC", "ETH", "SOL", "HYPE", "ZEC", "MON", "xyz:NVDA", "xyz:BRENTOIL", "xyz:AMD", "io:ANTH"}
+TAPE_MIN_USD = float(os.environ.get("HL_TAPE_MIN_USD", "1000"))
+TAPE_LATE_SEC = 120                # an hour is written this long after it ends
 
 engine = create_async_engine(settings.DATABASE_URL, pool_size=2, max_overflow=0, pool_recycle=1800)
 Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -162,6 +173,12 @@ ut_last: dict[tuple[str, str], float] = {}   # (wallet, coin) -> monotonic of th
 ut_pending: dict[str, list] = {}   # wallet -> [(tm, coin, delta, px)] waiting for a position read
 ut_stats = {"trades": 0, "alerts": 0, "debounced": 0, "reduces": 0, "pending": 0, "dropped": 0}
 
+tape: dict[int, dict[tuple[str, str], list]] = {}   # hour start s -> (coin, wallet) -> [buy_usd, sell_usd, buy_sz, sell_sz, tbuy_usd, tsell_usd, n]
+tape_last: dict[str, int] = {}     # coin -> newest trade ms counted
+tape_tids: dict[str, set] = {}     # coin -> tids counted at tape_last[coin]
+tape_up: dict[int, int] = {}       # hour start s -> connected minutes seen
+tape_started = int(time.time())
+
 
 async def info(body: dict):
     """One paced Hyperliquid info read. Sleeps after each call in proportion to its
@@ -210,6 +227,15 @@ async def ensure_tables():
             "CREATE TABLE IF NOT EXISTS hl_feed_watch ("
             " wallet VARCHAR(42) NOT NULL PRIMARY KEY,"
             " seen_until DATETIME NOT NULL, profile_until DATETIME NULL)"))
+        await c.execute(text(
+            "CREATE TABLE IF NOT EXISTS pw_tape ("
+            " hour DATETIME NOT NULL, coin VARCHAR(32) NOT NULL, wallet VARCHAR(42) NOT NULL,"
+            " buy_usd DOUBLE NOT NULL, sell_usd DOUBLE NOT NULL, buy_sz DOUBLE NOT NULL, sell_sz DOUBLE NOT NULL,"
+            " tbuy_usd DOUBLE NOT NULL, tsell_usd DOUBLE NOT NULL, n INT NOT NULL,"
+            " PRIMARY KEY (coin, hour, wallet), KEY ix_h (hour))"))
+        await c.execute(text(
+            "CREATE TABLE IF NOT EXISTS pw_tape_hours ("
+            " hour DATETIME NOT NULL PRIMARY KEY, up_min INT NOT NULL, partial TINYINT NOT NULL, rows_n INT NOT NULL)"))
         await c.execute(text(
             "CREATE TABLE IF NOT EXISTS hl_feed_coin_seen ("
             " coin VARCHAR(40) NOT NULL PRIMARY KEY, last_ms BIGINT NOT NULL)"))
@@ -294,8 +320,8 @@ async def coin_list() -> tuple[list[str], int]:
     main_coins.update(main)
     traded = await traded_coins()
     base = main + hip3 + spot
-    keep = [c for c in base if c in traded]
-    dropped = [c for c in base if c not in traded]
+    keep = [c for c in base if c in traded or c in TAPE_COINS]
+    dropped = [c for c in base if c not in traded and c not in TAPE_COINS]
     cap = MAX_SUBS - PROBE_SLOTS
     want = (keep + outcome)[:cap]
     left = (keep + outcome)[cap:]
@@ -835,6 +861,84 @@ async def ut_write_alert(w: str, coin: str, side: str, notional: float, level: s
         logger.warning("hl trades feed: ut alert write failed for %s %s: %s", w[:10], coin, exc)
 
 
+# ---- tape (Pressure Watch) ---------------------------------------------------
+
+def tape_trade(t: dict, coin: str, tm: int, users: list[str]) -> None:
+    """Sum one trade into its hour. users = [buyer, seller]; side B = the buyer took."""
+    if len(users) < 2:
+        return
+    tid = t.get("tid")
+    last = tape_last.get(coin, 0)
+    if tm < last:
+        return                        # already counted (reconnect snapshot)
+    if tm == last:
+        if tid in tape_tids[coin]:
+            return
+        tape_tids[coin].add(tid)
+    else:
+        tape_last[coin] = tm
+        tape_tids[coin] = {tid}
+    sz = float(t.get("sz") or 0)
+    usd = sz * float(t.get("px") or 0)
+    taker_buy = t.get("side") == "B"
+    h = tape.setdefault(tm // 1000 // 3600 * 3600, {})
+    b = h.setdefault((coin, users[0]), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0])
+    b[0] += usd
+    b[2] += sz
+    b[6] += 1
+    if taker_buy:
+        b[4] += usd
+    a = h.setdefault((coin, users[1]), [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0])
+    a[1] += usd
+    a[3] += sz
+    a[6] += 1
+    if not taker_buy:
+        a[5] += usd
+
+
+async def tape_loop():
+    while True:
+        await asyncio.sleep(60)
+        now = int(time.time())
+        if state["connected"]:
+            hk = now // 3600 * 3600
+            tape_up[hk] = tape_up.get(hk, 0) + 1
+        for hk in sorted(k for k in tape if k + 3600 + TAPE_LATE_SEC <= now):
+            rows, small = [], {}
+            for (coin, w), v in tape[hk].items():
+                if v[0] + v[1] >= TAPE_MIN_USD:
+                    rows.append((coin, w, v))
+                else:
+                    sv = small.setdefault(coin, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0])
+                    for i in range(7):
+                        sv[i] += v[i]
+            rows += [(coin, "_small", v) for coin, v in small.items()]
+            hour = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(hk))
+            params = [{"h": hour, "c": c, "w": w, "bu": v[0], "su": v[1], "bs": v[2], "ss": v[3], "tb": v[4], "ts": v[5], "n": v[6]}
+                      for c, w, v in rows]
+            try:
+                async with Session() as s:
+                    for i in range(0, len(params), 2000):
+                        await s.execute(text(
+                            "INSERT INTO pw_tape (hour, coin, wallet, buy_usd, sell_usd, buy_sz, sell_sz, tbuy_usd, tsell_usd, n) "
+                            "VALUES (:h, :c, :w, :bu, :su, :bs, :ss, :tb, :ts, :n) ON DUPLICATE KEY UPDATE "
+                            "buy_usd = buy_usd + VALUES(buy_usd), sell_usd = sell_usd + VALUES(sell_usd), "
+                            "buy_sz = buy_sz + VALUES(buy_sz), sell_sz = sell_sz + VALUES(sell_sz), "
+                            "tbuy_usd = tbuy_usd + VALUES(tbuy_usd), tsell_usd = tsell_usd + VALUES(tsell_usd), n = n + VALUES(n)"),
+                            params[i:i + 2000])
+                    await s.execute(text(
+                        "INSERT INTO pw_tape_hours (hour, up_min, partial, rows_n) VALUES (:h, :u, :p, :r) "
+                        "ON DUPLICATE KEY UPDATE up_min = up_min + VALUES(up_min), partial = 1, rows_n = rows_n + VALUES(rows_n)"),
+                        {"h": hour, "u": tape_up.get(hk, 0), "p": int(hk < tape_started), "r": len(params)})
+                    await s.commit()
+                del tape[hk]
+                tape_up.pop(hk, None)
+                logger.info("hl trades feed: tape %s written, %d rows", hour, len(params))
+            except Exception as exc:
+                logger.warning("hl trades feed: tape write failed: %s", exc)
+                break
+
+
 # ---- featured traders --------------------------------------------------------
 
 def count_counterparty(a: str, b: str, tm: int) -> None:
@@ -1115,6 +1219,8 @@ async def ws_loop():
                                 if u in accts_of or u in watch:
                                     d = float(t.get("sz") or 0) * (1 if i == 0 else -1)
                                     pos_trade(u, coin, d, tm, now_ms)
+                        if coin in TAPE_COINS:
+                            tape_trade(t, coin, tm, users)
                         if tm < t0 - 600_000:
                             continue          # old trades in the subscription snapshot
                         state["trades"] += 1
@@ -1149,7 +1255,8 @@ async def main():
     tasks = [asyncio.create_task(ws_loop()), asyncio.create_task(write_loop()), asyncio.create_task(refresh_loop()),
              asyncio.create_task(probe_loop()), asyncio.create_task(pos_loop()), asyncio.create_task(pos_sweep_loop()),
              asyncio.create_task(watch_loop()), asyncio.create_task(featured_reload_loop()),
-             asyncio.create_task(featured_close_loop()), asyncio.create_task(ut_reload_loop())]
+             asyncio.create_task(featured_close_loop()), asyncio.create_task(ut_reload_loop()),
+             asyncio.create_task(tape_loop())]
     await refresh_accounts(wallets, with_subs=True)     # sub-accounts while the feed already runs
     tasks.append(asyncio.create_task(unseen_loop()))
     await asyncio.gather(*tasks)

@@ -806,6 +806,52 @@ def first_open_times(ev):
     return out
 
 
+def tape_groups():
+    mm = {r[0].lower() for r in q("SELECT wallet FROM ut_wallet_meta WHERE is_mm=1")}
+    big = {r[0] for r in q("SELECT wallet FROM pw_wallets WHERE lb_at>=%s AND account_value>=1000000", (NOW - timedelta(days=3),))}
+    return mm, big
+
+
+def tape_read(coin, mm, big, tags):
+    """Every trade on the market from the trades feed (pw_tape), last 24 h:
+    taker pressure, net by wallet group, the wallets that bought or sold most."""
+    since = (NOW - timedelta(hours=24)).replace(minute=0, second=0)
+    hours = q("SELECT hour, up_min, partial FROM pw_tape_hours WHERE hour>=%s ORDER BY hour", (since,))
+    if not hours:
+        return None
+    rows = q("SELECT hour, wallet, buy_usd, sell_usd, tbuy_usd, tsell_usd, n FROM pw_tape WHERE coin=%s AND hour>=%s", (coin, since))
+    vol = tb = ts = 0.0
+    grp = {"mm": 0.0, "big": 0.0, "rest": 0.0}
+    per_w = defaultdict(lambda: [0.0, 0.0, 0.0, 0])
+    hourly = defaultdict(float)
+    for hr, w, bu, su, tbu, tsu, n in rows:
+        vol += bu
+        tb += tbu
+        ts += tsu
+        hourly[hr] += tbu - tsu
+        if w == "_small":
+            grp["rest"] += bu - su
+            continue
+        g = "mm" if w in mm else "big" if w in big else "rest"
+        grp[g] += bu - su
+        p = per_w[w]
+        p[0] += bu - su
+        p[1] += bu + su
+        p[2] += tbu + tsu
+        p[3] += n
+    top = sorted(per_w.items(), key=lambda x: -abs(x[1][0]))[:10]
+    cum, run = [], 0.0
+    for hr in sorted(hourly):
+        run += hourly[hr]
+        cum.append((hr + timedelta(hours=1), run))
+    up = sum(h[1] for h in hours)
+    return {"vol": vol, "taker_net": tb - ts, "taker_buy_share": (tb / (tb + ts)) if tb + ts else None,
+            "groups": grp, "n_wallets": len(per_w), "hours": len(hours), "up_min": up,
+            "first": hours[0][0], "top": [(w, v[0], v[1], v[2] / v[1] if v[1] else 0, v[3], tags.get(w, []) + (["$1M+ account"] if w in big else []))
+                                         for w, v in top],
+            "cum": cum}
+
+
 def us_market_open(t):
     if t.weekday() >= 5:
         return False
@@ -818,6 +864,7 @@ def readings(bt):
     failed = {k for k, v in (bt or {}).get("rules", {}).items()
               if v["h24"]["all"]["n"] and v["h24"]["all"]["hit"] < v["h24"]["all"]["base"]}
     tags = wallet_tags()
+    mm_set, big_set = tape_groups()
     out = []
     for coin in COINS:
         since = (NOW - timedelta(days=32)).replace(minute=0, second=0)
@@ -903,7 +950,7 @@ def readings(bt):
             "flips": [(e[0], e[1].lower(), e[3], e[4], e[6], e[7], e[8], tags.get(e[1].lower(), [])) for e in flips[-10:]][::-1],
             "bigs": [(e[0], e[1].lower(), e[2], e[3], e[4], e[8], tags.get(e[1].lower(), [])) for e in bigs[-10:]][::-1],
             "margins": margins, "bands": dict(bands), "longs": longs, "shorts": shorts, "n_pos": len(pos), "pos_cycle": cyc, "oi_usd": oi_usd,
-            "off_hours_flow": off, "ctx": last_ctx, "window_from": since.strftime("%d %b"),
+            "off_hours_flow": off, "ctx": last_ctx, "tape": tape_read(coin, mm_set, big_set, tags), "window_from": since.strftime("%d %b"),
             "price_72h": [(t, v) for t, v in pairs if t >= NOW - timedelta(hours=72)],
             "oi_72h": [(t, v) for t, v in oi_series if t >= NOW - timedelta(hours=72)],
             "flow_72h": [(x["t"], x["flow24"]) for x in feats if x["t"] >= NOW - timedelta(hours=72)],
@@ -1090,7 +1137,7 @@ nav a{margin-right:10px;white-space:nowrap}
          '<nav>' + "".join(f'<a href="#{anchor(x["coin"])}">{esc(x["label"])}</a>' for x in rd) + '<a href="#test">Do the signals work?</a></nav>',
          '<h2>All markets now</h2><div class="scroll"><table><tr><th>Market</th><th class="n">Price</th><th class="n">24 h</th>'
          '<th class="n">Open positions 24 h</th><th class="n">Funding (yearly)</th><th class="n">Big wallets net 24 h</th>'
-         '<th class="n">Flips 12 h</th><th class="n">Covered</th><th>Verdict</th><th>Why</th></tr>']
+         '<th class="n">Flips 12 h</th><th class="n">Covered</th><th class="n">All trades: buy pressure 24 h</th><th>Verdict</th><th>Why</th></tr>']
     for x in rd:
         r = x["r"] or {}
         fr = r.get("fund24")
@@ -1102,10 +1149,12 @@ nav a{margin-right:10px;white-space:nowrap}
                  f'<td class="n {"up" if (r.get("flow24") or 0) > 0 else "down"}">{usd_s(r.get("flow24"), True)}</td>'
                  f'<td class="n">{usd_s(r.get("flips12"), True)}</td>'
                  f'<td class="n">{(str(round((x["longs"] + x["shorts"]) / 2 / x["oi_usd"] * 100)) + "%") if x["oi_usd"] else "-"}</td>'
+                 + (f'<td class="n {"up" if x["tape"]["taker_net"] > 0 else "down"}">{usd_s(x["tape"]["taker_net"], True)}</td>' if x["tape"] else '<td class="n">-</td>') +
                  f'<td><span class="pill {verdict_cls(x["verdict"])}">{esc(x["verdict"])}</span></td><td>{why}</td></tr>')
     h.append('</table></div><p class="dim">Open positions 24 h = change in total open contracts on Hyperliquid, in coins. Big wallets net = what the followed '
              'wallets bought (+) or sold (-) in 24 h, counting opens, adds, cuts, closes and flips. Flips = net value of wallets that switched side '
-             '(+ = shorts turned long). Covered = share of all open positions on Hyperliquid held by the followed wallets.</p>')
+             '(+ = shorts turned long). Covered = share of all open positions on Hyperliquid held by the followed wallets. '
+             'Buy pressure = from every trade on the market (all wallets): value bought by traders who took the price minus value sold the same way.</p>')
 
     for x in rd:
         r = x["r"] or {}
@@ -1132,6 +1181,32 @@ nav a{margin-right:10px;white-space:nowrap}
         if r.get("big_floor"):
             lines.append(f'"Unusually large" for this market = a single open or add of {usd_s(r["big_floor"])} or more (top 5% over the last 30 days).')
         h.append('<ul>' + "".join(f'<li>{l}</li>' for l in lines) + '</ul>')
+        tp = x["tape"]
+        if tp:
+            gr = tp["groups"]
+            short = tp["hours"] < 24 or tp["up_min"] < tp["hours"] * 60 - 5
+            bs = tp["taker_buy_share"]
+            share_txt = f'{bs * 100:.1f}% of price-taking trades were buys' if bs is not None else ''
+            h.append(f'<h3>Every trade, every wallet (last {tp["hours"]} h)</h3>'
+                     + (f'<p class="dim">Counting started {tp["first"]:%d %b %H:%M} UTC; '
+                        f'the feed was connected {tp["up_min"]} of {tp["hours"] * 60} minutes in that time.</p>' if short else '')
+                     + '<div class="grid">'
+                     f'<div class="card kv"><span class="dim">Traded</span><b>{usd_s(tp["vol"])}</b>by {tp["n_wallets"]:,} wallets with $1K+ in an hour, plus smaller ones</div>'
+                     f'<div class="card kv"><span class="dim">Buy pressure (takers bought minus sold)</span><b class="{"up" if tp["taker_net"] > 0 else "down"}">{usd_s(tp["taker_net"], True)}</b>'
+                     f'{share_txt}'
+                     f'{spark(tp["cum"], color="var(--acc)", zero=True)}</div>'
+                     f'<div class="card kv"><span class="dim">Who bought, net</span>'
+                     f'<span>Accounts worth $1M+: <b class="{"up" if gr["big"] > 0 else "down"}" style="display:inline">{usd_s(gr["big"], True)}</b></span><br>'
+                     f'<span>Market makers: <b class="{"up" if gr["mm"] > 0 else "down"}" style="display:inline">{usd_s(gr["mm"], True)}</b></span><br>'
+                     f'<span>Everyone else: <b class="{"up" if gr["rest"] > 0 else "down"}" style="display:inline">{usd_s(gr["rest"], True)}</b></span></div>'
+                     '</div>')
+            if tp["top"]:
+                h.append('<div class="scroll"><table><tr><th>Wallet</th><th class="n">Net bought</th><th class="n">Traded</th><th class="n">Took the price</th><th class="n">Trades</th><th>Tags</th></tr>')
+                for w, net, gross, tk, n, tg_ in tp["top"]:
+                    h.append(f'<tr><td>{wl(w)}</td><td class="n {"up" if net > 0 else "down"}">{usd_s(net, True)}</td><td class="n">{usd_s(gross)}</td>'
+                             f'<td class="n">{tk * 100:.0f}%</td><td class="n">{n:,}</td><td>{tagspan(tg_)}</td></tr>')
+                h.append('</table></div><p class="dim">Every buy has a seller, so all wallets together net to zero; what matters is who is on which side. '
+                         'Took the price = share of the wallet trading done by crossing the book (urgent), the rest was resting orders.</p>')
         if x["votes"]:
             h.append('<h3>Signals firing now</h3><ul>' + "".join(
                 f'<li><span class="{"up" if v["dir"] > 0 else "down"}">{"Expect up" if v["dir"] > 0 else "Expect down"}</span>: {esc(v["name"])} '
@@ -1210,7 +1285,7 @@ nav a{margin-right:10px;white-space:nowrap}
             f'<li><b>{esc(v["name"])}</b>: {plain(v)}</li>' for v in bt["rules"].values()) + '</ul>'
             '<span class="dim">Many followed wallets are market makers and hedgers, whose flow is not a bet. That is one reason "follow the big wallets" can fail.</span></div>')
     h.append('<h2>What this page cannot see</h2><ul>'
-             '<li>Only followed wallets: accounts worth $250K+ on the Hyperliquid leaderboard plus the most active traders of each market. Smaller wallets, and positions held off Hyperliquid, are not counted.</li>'
+             '<li>Positions: only followed wallets (accounts worth $250K+ on the Hyperliquid leaderboard plus the most active traders of each market). Trades: every wallet, from 26 Nov 2026, but not yet part of the history test.</li>'
              '<li>Accounts outside the 20-minute group are checked every 1 to 8 hours, so their changes show up later and as one step.</li>'
              '<li>A position opened and closed between two checks of the same wallet is missed.</li>'
              '<li>Total open positions history: hourly from 4 Nov 2026 for crypto, every 5 minutes from 25 Nov 2026 for all 10 markets.</li>'
@@ -1231,6 +1306,7 @@ def cycle():
     if os.environ.get("PW_NO_ALERTS") != "1":
         alerts(rd)
     q("DELETE FROM pw_readings WHERE t < %s", (NOW - timedelta(days=150),))
+    q("DELETE FROM pw_tape WHERE hour < %s", (NOW - timedelta(days=150),))
 
 
 if __name__ == "__main__":
