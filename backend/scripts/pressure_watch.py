@@ -1120,7 +1120,18 @@ th{color:var(--dim);font-weight:600}td.n,th.n{text-align:right;font-variant-nume
 .tag{display:inline-block;margin:0 4px 2px 0;padding:0 6px;border-radius:6px;background:var(--line);font-size:11px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px}.kv b{display:block;font-size:16px}
 .bar{height:10px;display:inline-block;vertical-align:middle}.ok{color:var(--up);font-weight:600}.no{color:var(--dim)}
-nav a{margin-right:10px;white-space:nowrap}
+nav{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:8px 0;margin:6px 0 0;overflow-x:auto;white-space:nowrap}
+nav a{display:inline-block;margin:0 6px 0 0;padding:4px 10px;border:1px solid var(--line);border-radius:14px;text-decoration:none;font-size:13px}
+.mk{display:none;scroll-margin-top:56px}.mk:target{display:block}.mk>h2{border-top:none;margin-top:10px;padding-top:6px}
+details{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:var(--card)}
+details>summary{cursor:pointer;padding:8px 12px;font-weight:600}details>summary .dim{font-weight:400}
+details>.scroll,details>p,details>ul,details>div{padding:0 12px 10px}details table{font-size:12px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:0 12px;align-items:start}
+.grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}.card.kv{margin:0}
+ul.facts{margin:10px 0;padding-left:18px;font-size:13px}
+.kv svg{display:block;width:100%;height:auto;max-height:56px;margin-top:4px}.kv>span.dim:first-child{display:block;font-size:12px}
+@media (max-width:640px){main{padding:10px}.grid{grid-template-columns:1fr 1fr;gap:8px}.card{padding:8px}.kv b{font-size:15px}.kv svg{max-height:36px}
+.grid .card.kv:last-child:nth-child(odd){grid-column:1/-1}h1{font-size:19px}}
 """
     h = ['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
          '<meta name="robots" content="noindex"><meta http-equiv="refresh" content="300">',
@@ -1128,21 +1139,20 @@ nav a{margin-right:10px;white-space:nowrap}
          '<h1>Pressure Watch</h1>',
          f'<p class="dim">Positions built before the move, and positions built against the trend, on 10 Hyperliquid markets. '
          f'Data as of <b>{NOW:%d %b %Y %H:%M} UTC</b>. The page rebuilds every 20 minutes and reloads itself every 5.</p>',
-         '<div class="card"><b>How to read it.</b> Each market gets a verdict. For the 6 crypto coins the verdict counts only signals that '
+         '<details><summary>How to read this page</summary><div>Each market gets a verdict. For the 6 crypto coins the verdict counts only signals that '
          'passed a test on 3 months of our own history (section "Do the signals work?"). The 4 stock and oil markets have no position history '
          'yet (collection started 25 Nov 2026), so their verdict is marked untested and is a reading, not a forecast. '
          f'"Big wallets" are the wallets we follow: <b>{coverage["wallets"]:,}</b> accounts checked in the last 12 hours '
          f'(every Hyperliquid account worth $1M+ every hour, $250K+ every 8 hours, the most active traders of each market every 20 minutes). '
-         'The "Covered" column shows how much of each market they hold. Not advice.</div>',
-         '<nav>' + "".join(f'<a href="#{anchor(x["coin"])}">{esc(x["label"])}</a>' for x in rd) + '<a href="#test">Do the signals work?</a></nav>',
-         '<h2>All markets now</h2><div class="scroll"><table><tr><th>Market</th><th class="n">Price</th><th class="n">24 h</th>'
+         'The "Covered" column shows how much of each market they hold. Not advice.</div></details>',
+         '<nav><a href="#top">Overview</a>' + "".join(f'<a href="#{anchor(x["coin"])}">{esc(x["label"])}</a>' for x in rd)
+         + '<a href="#test">Do the signals work?</a><a href="#limits">Limits</a></nav>',
+         '<h2 id="top" style="border-top:none;margin-top:12px;padding-top:0">All markets now</h2><div class="scroll"><table><tr><th>Market</th><th class="n">Price</th><th class="n">24 h</th>'
          '<th class="n">Open positions 24 h</th><th class="n">Funding (yearly)</th><th class="n">Big wallets net 24 h</th>'
-         '<th class="n">Flips 12 h</th><th class="n">Covered</th><th class="n">All trades: buy pressure 24 h</th><th>Verdict</th><th>Why</th></tr>']
+         '<th class="n">Flips 12 h</th><th class="n">Covered</th><th class="n">All trades: buy pressure 24 h</th><th>Verdict</th></tr>']
     for x in rd:
         r = x["r"] or {}
         fr = r.get("fund24")
-        why = "; ".join(f'<span class="{"up" if v["dir"] > 0 else "down"}">{esc(v["name"])}</span>' + ("" if v["tested"] else ' <span class="dim">(failed test, not counted)</span>' if v["failed"] else ' <span class="dim">(unproven)</span>')
-                        for v in x["votes"]) or '<span class="dim">no signal firing</span>'
         h.append(f'<tr><td><a href="#{anchor(x["coin"])}">{esc(x["label"])}</a></td><td class="n">{fmt_px(x["mark"])}</td>'
                  f'<td class="n {"up" if (r.get("ret24") or 0) > 0 else "down"}">{pct(r.get("ret24"))}</td>'
                  f'<td class="n">{pct(r.get("oi24"))}</td><td class="n">{pct(fr * 24 * 365 if fr is not None else None, 0)}</td>'
@@ -1150,22 +1160,44 @@ nav a{margin-right:10px;white-space:nowrap}
                  f'<td class="n">{usd_s(r.get("flips12"), True)}</td>'
                  f'<td class="n">{(str(round((x["longs"] + x["shorts"]) / 2 / x["oi_usd"] * 100)) + "%") if x["oi_usd"] else "-"}</td>'
                  + (f'<td class="n {"up" if x["tape"]["taker_net"] > 0 else "down"}">{usd_s(x["tape"]["taker_net"], True)}</td>' if x["tape"] else '<td class="n">-</td>') +
-                 f'<td><span class="pill {verdict_cls(x["verdict"])}">{esc(x["verdict"])}</span></td><td>{why}</td></tr>')
-    h.append('</table></div><p class="dim">Open positions 24 h = change in total open contracts on Hyperliquid, in coins. Big wallets net = what the followed '
+                 f'<td><span class="pill {verdict_cls(x["verdict"])}">{esc(x["verdict"])}</span></td></tr>')
+    h.append('</table></div><p class="dim">Tap a market (above or in the table) to open its detail.</p>'
+             '<details><summary>What the columns mean</summary><p class="dim">Open positions 24 h = change in total open contracts on Hyperliquid, in coins. Big wallets net = what the followed '
              'wallets bought (+) or sold (-) in 24 h, counting opens, adds, cuts, closes and flips. Flips = net value of wallets that switched side '
              '(+ = shorts turned long). Covered = share of all open positions on Hyperliquid held by the followed wallets. '
-             'Buy pressure = from every trade on the market (all wallets): value bought by traders who took the price minus value sold the same way.</p>')
+             'Buy pressure = from every trade on the market (all wallets): value bought by traders who took the price minus value sold the same way.</p></details>')
 
     for x in rd:
         r = x["r"] or {}
-        h.append(f'<h2 id="{anchor(x["coin"])}">{esc(x["label"])} <span class="dim" style="font-size:13px">{esc(x["coin"])}</span> '
+        h.append(f'<section class="mk" id="{anchor(x["coin"])}"><h2>{esc(x["label"])} <span class="dim" style="font-size:13px">{esc(x["coin"])}</span> '
                  f'<span class="pill {verdict_cls(x["verdict"])}">{esc(x["verdict"])}</span></h2>')
         fr = r.get("fund24")
+        tp = x["tape"]
+        tape_cards = ""
+        if tp:
+            gr = tp["groups"]
+            bs = tp["taker_buy_share"]
+            share_txt = f'{bs * 100:.1f}% of price-taking trades were buys' if bs is not None else ''
+            tape_cards = (
+                f'<div class="card kv"><span class="dim">All trades, last {tp["hours"]} h: buy pressure</span><b class="{"up" if tp["taker_net"] > 0 else "down"}">{usd_s(tp["taker_net"], True)}</b>'
+                f'<span class="dim">{share_txt}</span>{spark(tp["cum"], color="var(--acc)", zero=True)}</div>'
+                f'<div class="card kv"><span class="dim">All trades, last {tp["hours"]} h: who bought, net</span>'
+                f'<span>$1M+ accounts: <b class="{"up" if gr["big"] > 0 else "down"}" style="display:inline">{usd_s(gr["big"], True)}</b></span><br>'
+                f'<span>Market makers: <b class="{"up" if gr["mm"] > 0 else "down"}" style="display:inline">{usd_s(gr["mm"], True)}</b></span><br>'
+                f'<span>Everyone else: <b class="{"up" if gr["rest"] > 0 else "down"}" style="display:inline">{usd_s(gr["rest"], True)}</b></span><br>'
+                f'<span class="dim">{usd_s(tp["vol"])} traded</span></div>')
         h.append('<div class="grid">'
                  f'<div class="card kv"><span class="dim">Price, last 72 h</span><b>{fmt_px(x["mark"])} <span class="{"up" if (r.get("ret24") or 0) > 0 else "down"}" style="font-size:13px">{pct(r.get("ret24"))} 24 h</span></b>{spark(x["price_72h"])}</div>'
                  f'<div class="card kv"><span class="dim">Total open positions (USD), last 72 h</span><b>{usd_s(x["oi_72h"][-1][1] if x["oi_72h"] else None)} <span style="font-size:13px">{pct(r.get("oi24"))} 24 h</span></b>{spark(x["oi_72h"], color="var(--warn)")}</div>'
                  f'<div class="card kv"><span class="dim">Big wallets, rolling 24 h net buying</span><b class="{"up" if (r.get("flow24") or 0) > 0 else "down"}">{usd_s(r.get("flow24"), True)}</b>{spark(x["flow_72h"], color="var(--acc)", zero=True)}</div>'
-                 '</div>')
+                 + tape_cards + '</div>')
+        if x["votes"]:
+            h.append('<h3>Signals firing now</h3><ul>' + "".join(
+                f'<li><span class="{"up" if v["dir"] > 0 else "down"}">{"Expect up" if v["dir"] > 0 else "Expect down"}</span>: {esc(v["name"])} '
+                + ('<span class="ok">passed the history test</span>' if v["tested"] else
+                   '<span class="down">failed the history test (wrong more often than chance), not counted</span>' if v["failed"] else
+                   '<span class="no">not proven</span>') + '</li>'
+                for v in x["votes"]) + '</ul>')
         lines = []
         if x["kind"] == "rwa":
             lines.append(f'Position history for this market started 25 Nov 2026 ({x["hist_days"]} days so far). Readings need about 3 days before the ranks mean anything; signals stay untested until there are weeks of data.')
@@ -1180,42 +1212,20 @@ nav a{margin-right:10px;white-space:nowrap}
                          + ('longs pay shorts.' if fr > 0 else 'shorts pay longs.'))
         if r.get("big_floor"):
             lines.append(f'"Unusually large" for this market = a single open or add of {usd_s(r["big_floor"])} or more (top 5% over the last 30 days).')
-        h.append('<ul>' + "".join(f'<li>{l}</li>' for l in lines) + '</ul>')
-        tp = x["tape"]
-        if tp:
-            gr = tp["groups"]
+        h.append('<ul class="facts">' + "".join(f'<li>{l}</li>' for l in lines) + '</ul><div class="two">')
+        if tp and tp["top"]:
             short = tp["hours"] < 24 or tp["up_min"] < tp["hours"] * 60 - 5
-            bs = tp["taker_buy_share"]
-            share_txt = f'{bs * 100:.1f}% of price-taking trades were buys' if bs is not None else ''
-            h.append(f'<h3>Every trade, every wallet (last {tp["hours"]} h)</h3>'
-                     + (f'<p class="dim">Counting started {tp["first"]:%d %b %H:%M} UTC; '
-                        f'the feed was connected {tp["up_min"]} of {tp["hours"] * 60} minutes in that time.</p>' if short else '')
-                     + '<div class="grid">'
-                     f'<div class="card kv"><span class="dim">Traded</span><b>{usd_s(tp["vol"])}</b>by {tp["n_wallets"]:,} wallets with $1K+ in an hour, plus smaller ones</div>'
-                     f'<div class="card kv"><span class="dim">Buy pressure (takers bought minus sold)</span><b class="{"up" if tp["taker_net"] > 0 else "down"}">{usd_s(tp["taker_net"], True)}</b>'
-                     f'{share_txt}'
-                     f'{spark(tp["cum"], color="var(--acc)", zero=True)}</div>'
-                     f'<div class="card kv"><span class="dim">Who bought, net</span>'
-                     f'<span>Accounts worth $1M+: <b class="{"up" if gr["big"] > 0 else "down"}" style="display:inline">{usd_s(gr["big"], True)}</b></span><br>'
-                     f'<span>Market makers: <b class="{"up" if gr["mm"] > 0 else "down"}" style="display:inline">{usd_s(gr["mm"], True)}</b></span><br>'
-                     f'<span>Everyone else: <b class="{"up" if gr["rest"] > 0 else "down"}" style="display:inline">{usd_s(gr["rest"], True)}</b></span></div>'
-                     '</div>')
             if tp["top"]:
-                h.append('<div class="scroll"><table><tr><th>Wallet</th><th class="n">Net bought</th><th class="n">Traded</th><th class="n">Took the price</th><th class="n">Trades</th><th>Tags</th></tr>')
+                h.append(f'<details><summary>Who traded most, all trades <span class="dim">(last {tp["hours"]} h, top {len(tp["top"])})</span></summary>'
+                         + (f'<p class="dim">Counting started {tp["first"]:%d %b %H:%M} UTC; the feed was connected {tp["up_min"]} of {tp["hours"] * 60} minutes.</p>' if short else '')
+                         + '<div class="scroll"><table><tr><th>Wallet</th><th class="n">Net bought</th><th class="n">Traded</th><th class="n">Took the price</th><th class="n">Trades</th><th>Tags</th></tr>')
                 for w, net, gross, tk, n, tg_ in tp["top"]:
                     h.append(f'<tr><td>{wl(w)}</td><td class="n {"up" if net > 0 else "down"}">{usd_s(net, True)}</td><td class="n">{usd_s(gross)}</td>'
                              f'<td class="n">{tk * 100:.0f}%</td><td class="n">{n:,}</td><td>{tagspan(tg_)}</td></tr>')
                 h.append('</table></div><p class="dim">Every buy has a seller, so all wallets together net to zero; what matters is who is on which side. '
-                         'Took the price = share of the wallet trading done by crossing the book (urgent), the rest was resting orders.</p>')
-        if x["votes"]:
-            h.append('<h3>Signals firing now</h3><ul>' + "".join(
-                f'<li><span class="{"up" if v["dir"] > 0 else "down"}">{"Expect up" if v["dir"] > 0 else "Expect down"}</span>: {esc(v["name"])} '
-                + ('<span class="ok">passed the history test</span>' if v["tested"] else
-                   '<span class="down">failed the history test (wrong more often than chance), not counted</span>' if v["failed"] else
-                   '<span class="no">not proven</span>') + '</li>'
-                for v in x["votes"]) + '</ul>')
+                         'Took the price = share of the wallet trading done by crossing the book (urgent), the rest was resting orders.</p></details>')
         if x["top"]:
-            h.append('<h3>Wallets behind the last 24 h</h3><div class="scroll"><table><tr><th>Wallet</th><th class="n">Net 24 h</th><th class="n">Changes</th>'
+            h.append(f'<details><summary>Position changes by followed wallets <span class="dim">(24 h, top {len(x["top"])})</span></summary><div class="scroll"><table><tr><th>Wallet</th><th class="n">Net 24 h</th><th class="n">Changes</th>'
                      '<th>Position now</th><th class="n">Entry</th><th class="n">Leverage</th><th class="n">Liquidation</th><th>Opened</th><th>Tags</th></tr>')
             for w, v, n, p, op, tg_ in x["top"]:
                 if p:
@@ -1225,37 +1235,38 @@ nav a{margin-right:10px;white-space:nowrap}
                     pn, ent, lev, liq = '<span class="dim">flat</span>', "-", "-", "-"
                 h.append(f'<tr><td>{wl(w)}</td><td class="n {"up" if v > 0 else "down"}">{usd_s(v, True)}</td><td class="n">{n}</td><td>{pn}</td>'
                          f'<td class="n">{ent}</td><td class="n">{lev}</td><td class="n">{liq}</td><td>{op.strftime("%d %b %H:%M") if op else "before " + x["window_from"]}</td><td>{tagspan(tg_)}</td></tr>')
-            h.append('</table></div>')
+            h.append('</table></div></details>')
         if x["flips"]:
-            h.append('<h3>Side switches, last 24 h</h3><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>Now</th><th class="n">Value</th><th class="n">Price</th><th>Tags</th></tr>')
+            h.append(f'<details><summary>Side switches <span class="dim">(24 h, {len(x["flips"])})</span></summary><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>Now</th><th class="n">Value</th><th class="n">Price</th><th>Tags</th></tr>')
             for t, w, side, usd, sb, sa, px_, tg_ in x["flips"]:
                 h.append(f'<tr><td>{t:%d %b %H:%M}</td><td>{wl(w)}</td><td class="{"up" if side == "long" else "down"}">{"short to long" if side == "long" else "long to short"}</td>'
                          f'<td class="n">{usd_s(abs(usd))}</td><td class="n">{fmt_px(px_)}</td><td>{tagspan(tg_)}</td></tr>')
-            h.append('</table></div>')
+            h.append('</table></div></details>')
         if x["bigs"]:
-            h.append('<h3>Unusually large new positions, last 24 h</h3><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>What</th><th class="n">Value</th><th class="n">Price</th><th>Tags</th></tr>')
+            h.append(f'<details><summary>Unusually large new positions <span class="dim">(24 h, {len(x["bigs"])})</span></summary><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>What</th><th class="n">Value</th><th class="n">Price</th><th>Tags</th></tr>')
             for t, w, et, side, usd, px_, tg_ in x["bigs"]:
                 h.append(f'<tr><td>{t:%d %b %H:%M}</td><td>{wl(w)}</td><td class="{"up" if usd > 0 else "down"}">{esc(et.lower())} {esc(side)}</td>'
                          f'<td class="n">{usd_s(abs(usd))}</td><td class="n">{fmt_px(px_)}</td><td>{tagspan(tg_)}</td></tr>')
-            h.append('</table></div>')
+            h.append('</table></div></details>')
         if x["margins"]:
-            h.append('<h3>Collateral moves (size unchanged), last 24 h</h3><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>Side</th><th>What</th><th class="n">Margin before</th><th class="n">after</th></tr>')
+            h.append(f'<details><summary>Collateral moves, size unchanged <span class="dim">(24 h, {len(x["margins"])})</span></summary><div class="scroll"><table><tr><th>Time (UTC)</th><th>Wallet</th><th>Side</th><th>What</th><th class="n">Margin before</th><th class="n">after</th></tr>')
             for t, w, et, side, sa, mb, ma, px_ in x["margins"]:
                 h.append(f'<tr><td>{t:%d %b %H:%M}</td><td>{wl(w.lower())}</td><td>{esc(side)}</td><td>{"added collateral" if et == "MARGIN_ADD" else "removed collateral"}</td>'
                          f'<td class="n">{usd_s(f(mb))}</td><td class="n">{usd_s(f(ma))}</td></tr>')
-            h.append('</table></div>')
+            h.append('</table></div></details>')
         if x["bands"]:
             mx = max(max(v) for v in x["bands"].values()) or 1
-            h.append('<h3>Where followed positions would be force-closed (within 20% of price)</h3><div class="scroll"><table><tr><th class="n">Distance</th><th class="n">Price</th><th>Longs liquidated</th><th>Shorts liquidated</th></tr>')
+            h.append('<details><summary>Where followed positions would be force-closed <span class="dim">(within 20% of price)</span></summary><div class="scroll"><table><tr><th class="n">Distance</th><th class="n">Price</th><th>Longs liquidated</th><th>Shorts liquidated</th></tr>')
             for b in sorted(x["bands"], reverse=True):
                 lv, sv = x["bands"][b]
                 h.append(f'<tr><td class="n">{b * 100:+.0f}%</td><td class="n">{fmt_px(x["mark"] * (1 + b)) if x["mark"] else "-"}</td>'
                          f'<td><span class="bar" style="width:{lv / mx * 160:.0f}px;background:var(--down)"></span> {usd_s(lv) if lv else ""}</td>'
                          f'<td><span class="bar" style="width:{sv / mx * 160:.0f}px;background:var(--up)"></span> {usd_s(sv) if sv else ""}</td></tr>')
-            h.append('</table></div><p class="dim">Large clusters near price can act as a magnet: a move into them forces more selling (longs) or buying (shorts).</p>')
+            h.append('</table></div><p class="dim">Large clusters near price can act as a magnet: a move into them forces more selling (longs) or buying (shorts).</p></details>')
+        h.append('</div></section>')
 
     # backtest section
-    h.append('<h2 id="test">Do the signals work?</h2>')
+    h.append('<section class="mk" id="test"><h2>Do the signals work?</h2>')
     if not bt:
         h.append('<p>The history test has not run yet.</p>')
     else:
@@ -1284,12 +1295,12 @@ nav a{margin-right:10px;white-space:nowrap}
         h.append('<div class="card"><b>What the test says in plain words.</b><ul>' + "".join(
             f'<li><b>{esc(v["name"])}</b>: {plain(v)}</li>' for v in bt["rules"].values()) + '</ul>'
             '<span class="dim">Many followed wallets are market makers and hedgers, whose flow is not a bet. That is one reason "follow the big wallets" can fail.</span></div>')
-    h.append('<h2>What this page cannot see</h2><ul>'
+    h.append('</section><section class="mk" id="limits"><h2>What this page cannot see</h2><ul>'
              '<li>Positions: only followed wallets (accounts worth $250K+ on the Hyperliquid leaderboard plus the most active traders of each market). Trades: every wallet, from 26 Nov 2026, but not yet part of the history test.</li>'
              '<li>Accounts outside the 20-minute group are checked every 1 to 8 hours, so their changes show up later and as one step.</li>'
              '<li>A position opened and closed between two checks of the same wallet is missed.</li>'
              '<li>Total open positions history: hourly from 4 Nov 2026 for crypto, every 5 minutes from 25 Nov 2026 for all 10 markets.</li>'
-             '<li>Signals that passed on past data can stop working. Treat a verdict as a reason to look, not a reason to trade.</li></ul>')
+             '<li>Signals that passed on past data can stop working. Treat a verdict as a reason to look, not a reason to trade.</li></ul></section>')
     h.append('<p class="dim">SMIndex research. Read-only data from Hyperliquid. Not financial advice.</p></main></body></html>')
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     tmp = PAGE.with_suffix(".tmp")
