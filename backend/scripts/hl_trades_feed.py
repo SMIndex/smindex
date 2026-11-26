@@ -175,7 +175,9 @@ ut_stats = {"trades": 0, "alerts": 0, "debounced": 0, "reduces": 0, "pending": 0
 
 tape: dict[int, dict[tuple[str, str], list]] = {}   # hour start s -> (coin, wallet) -> [buy_usd, sell_usd, buy_sz, sell_sz, tbuy_usd, tsell_usd, n]
 tape_last: dict[str, int] = {}     # coin -> newest trade ms counted
-tape_tids: dict[str, set] = {}     # coin -> tids counted at tape_last[coin]
+tape_seen: dict[str, dict] = {}    # coin -> {tid: trade ms} of the last TAPE_SEEN_MS (reconnect snapshots repeat trades)
+tape_stats = {"late": 0, "dup": 0, "counted": 0}
+TAPE_SEEN_MS = 20 * 60 * 1000
 tape_up: dict[int, int] = {}       # hour start s -> connected minutes seen
 tape_started = int(time.time())
 
@@ -469,7 +471,8 @@ async def sync_subscriptions(ws) -> None:
         await ws.send(json.dumps({"method": "unsubscribe", "subscription": {"type": "trades", "coin": c}}))
         subscribed.discard(c)
         await asyncio.sleep(SUB_SEND_PAUSE)
-    for c in [c for c in coins if c not in subscribed]:
+    # the tape markets first: a reconnect then misses the least of them
+    for c in sorted((c for c in coins if c not in subscribed), key=lambda c: c not in TAPE_COINS):
         await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "trades", "coin": c}}))
         subscribed.add(c)
         await asyncio.sleep(SUB_SEND_PAUSE)
@@ -868,16 +871,16 @@ def tape_trade(t: dict, coin: str, tm: int, users: list[str]) -> None:
     if len(users) < 2:
         return
     tid = t.get("tid")
-    last = tape_last.get(coin, 0)
-    if tm < last:
+    seen = tape_seen.setdefault(coin, {})
+    if tid in seen:
+        tape_stats["dup"] += 1
         return                        # already counted (reconnect snapshot)
-    if tm == last:
-        if tid in tape_tids[coin]:
-            return
-        tape_tids[coin].add(tid)
+    seen[tid] = tm
+    if tm < tape_last.get(coin, 0):
+        tape_stats["late"] += 1       # arrived out of time order: still counted
     else:
         tape_last[coin] = tm
-        tape_tids[coin] = {tid}
+    tape_stats["counted"] += 1
     sz = float(t.get("sz") or 0)
     usd = sz * float(t.get("px") or 0)
     taker_buy = t.get("side") == "B"
@@ -900,6 +903,9 @@ async def tape_loop():
     while True:
         await asyncio.sleep(60)
         now = int(time.time())
+        cut = now * 1000 - TAPE_SEEN_MS
+        for coin, seen in tape_seen.items():
+            tape_seen[coin] = {k: v for k, v in seen.items() if v >= cut}
         if state["connected"]:
             hk = now // 3600 * 3600
             tape_up[hk] = tape_up.get(hk, 0) + 1
@@ -933,7 +939,8 @@ async def tape_loop():
                     await s.commit()
                 del tape[hk]
                 tape_up.pop(hk, None)
-                logger.info("hl trades feed: tape %s written, %d rows", hour, len(params))
+                logger.info("hl trades feed: tape %s written, %d rows; since start counted %d, out of order %d, repeats skipped %d",
+                            hour, len(params), tape_stats["counted"], tape_stats["late"], tape_stats["dup"])
             except Exception as exc:
                 logger.warning("hl trades feed: tape write failed: %s", exc)
                 break
