@@ -1054,9 +1054,9 @@ def plain(v):
 
 
 def render(rd, bt):
-    coverage = {"wallets": q("SELECT COUNT(*) FROM (SELECT wallet FROM pw_check WHERE last_at>=%s AND ok=1 UNION "
-                             "SELECT LOWER(wallet) FROM analytics_wallet_state WHERE cycle_ts=(SELECT MAX(cycle_ts) FROM analytics_wallet_state)) x",
-                             (NOW - timedelta(hours=12),))[0][0]}
+    seen = {r[0].lower() for r in q("SELECT wallet FROM pw_check WHERE last_at>=%s AND ok=1", (NOW - timedelta(hours=12),))}
+    seen |= {r[0].lower() for r in q("SELECT wallet FROM analytics_wallet_state WHERE cycle_ts=(SELECT MAX(cycle_ts) FROM analytics_wallet_state)")}
+    coverage = {"wallets": len(seen)}
     passed = [k for k, v in (bt or {}).get("rules", {}).items() if v.get("pass")]
     css = """
 :root{--bg:#0d1117;--card:#151b23;--ink:#e6edf3;--dim:#8b949e;--line:#30363d;--up:#3fb950;--down:#f85149;--acc:#58a6ff;--warn:#d29922}
